@@ -1,0 +1,55 @@
+# =========================
+# Unity
+# =========================
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# Cachés y archivos generados por Unity
+Assets/AssetStoreTools*
+Assets/StreamingAssets/aa.meta
+Assets/StreamingAssets/aa/*
+
+# Addressables generados
+Assets/AddressableAssetsData/*/*.bin*
+
+# Visual Studio / Rider / VSCode
+.vs/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# VSCode
+.vscode/
+
+# Colaboración y paquetes temporales
+*.unitypackage
+
+# Crash logs
+sysinfo.txt
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Archivos de Git LFS bloqueados temporales
+*.lfs-lock
+
