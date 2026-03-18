@@ -38,6 +38,9 @@ public class DatosDanio
     // Esta dirección representa desde dónde vino el golpe.
     public Vector3 direccionImpacto;
 
+    // Este valor indica si el golpe que conecto era un golpe fuerte.
+    public bool esGolpeFuerte;
+
     // Esta propiedad devuelve el daño final ya multiplicado por la zona.
     public float DanioFinalCalculado
     {
@@ -65,4 +68,3 @@ public interface IRecibidorDanio
     // Este método permite aplicar un golpe a cualquier objetivo compatible.
     void RecibirDanio(DatosDanio datosDanio);
 }
-

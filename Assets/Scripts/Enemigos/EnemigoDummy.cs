@@ -2,6 +2,12 @@ using System.Collections;
 using UnityEngine;
 using UnityEngine.AI;
 
+// COPILOT-CONTEXT:
+// Proyecto: Realm Brawl.
+// Motor: Unity 2022.3 LTS.
+// Este script controla la IA basica del enemigo, incluyendo patrulla,
+// memoria de vision, persecucion, ataque y secuencia de muerte.
+
 // Esta clase controla la IA basica del enemigo con una maquina de estados simple.
 [RequireComponent(typeof(NavMeshAgent))]
 [RequireComponent(typeof(VidaEnemigo))]
@@ -21,12 +27,24 @@ public class EnemigoDummy : MonoBehaviour
     // Esta velocidad se usa mientras patrulla.
     [SerializeField] private float velocidadPatrulla = 2f;
 
+    // Esta opcion intenta poblar automaticamente la patrulla con puntos hijos si la lista esta vacia.
+    [SerializeField] private bool autoBuscarPuntosPatrullaEnHijos = true;
+
     // Esta velocidad se usa mientras persigue.
     [Header("Persecucion")]
     [SerializeField] private float velocidadPersecucion = 3.5f;
 
     // Esta distancia define si puede ver al jugador.
-    [SerializeField] private float rangoVision = 10f;
+    [SerializeField] private float rangoVision = 15f;
+
+    // Este angulo define el cono de vision frontal.
+    [SerializeField] private float anguloVision = 120f;
+
+    // Este valor define cada cuanto se recalcula la vision real del jugador.
+    [SerializeField] private float intervaloChequeoVision = 0.1f;
+
+    // Este tiempo define cuanto recuerda la ultima posicion vista del jugador.
+    [SerializeField] private float tiempoMemoriaVision = 1.5f;
 
     // Esta mascara sirve para comprobar obstaculos entre enemigo y jugador.
     [SerializeField] private LayerMask mascaraObstaculosVision = ~0;
@@ -39,7 +57,7 @@ public class EnemigoDummy : MonoBehaviour
     [SerializeField] private float distanciaAtaque = 2.1f;
 
     // Este dano base se aplica al jugador cuando conecta el ataque.
-    [SerializeField] private float danioAtaque = 12f;
+    [SerializeField] private float danioAtaque = 15f;
 
     // Este tiempo representa el cooldown entre ataques consecutivos.
     [SerializeField] private float tiempoEntreAtaques = 1.5f;
@@ -54,12 +72,6 @@ public class EnemigoDummy : MonoBehaviour
     // Este tiempo define cuando se destruye el enemigo muerto.
     [SerializeField] private float tiempoDesaparecer = 3f;
 
-    // Este prefab visual se instancia al morir.
-    [SerializeField] private GameObject prefabOrbeExperiencia;
-
-    // Este desplazamiento permite soltar la orbe apenas arriba del suelo.
-    [SerializeField] private Vector3 offsetOrbe = new Vector3(0f, 0.25f, 0f);
-
     // Referencia al componente de navegacion.
     private NavMeshAgent agenteNavMesh;
 
@@ -71,6 +83,9 @@ public class EnemigoDummy : MonoBehaviour
 
     // Referencia al componente de vida del jugador.
     private VidaJugador vidaJugadorObjetivo;
+
+    // Referencia opcional a los componentes PuntoPatrulla.
+    private PuntoPatrulla[] puntosPatrullaComponentes;
 
     // Indice del punto de patrulla actual.
     private int indicePuntoPatrulla;
@@ -86,6 +101,18 @@ public class EnemigoDummy : MonoBehaviour
 
     // Guarda referencia de la rutina de muerte para evitar duplicados.
     private Coroutine rutinaMuerteActiva;
+
+    // Esta variable guarda la ultima posicion donde vio al jugador.
+    private Vector3 ultimaPosicionVistaJugador;
+
+    // Esta variable guarda el instante en el que vio por ultima vez al jugador.
+    private float tiempoUltimaVisionJugador = -999f;
+
+    // Esta variable marca si el jugador esta siendo visto en este frame.
+    private bool jugadorVisibleEnEsteFrame;
+
+    // Esta variable guarda el proximo instante en el que se recalculara la vision.
+    private float tiempoProximoChequeoVision;
 
     // Esta funcion se ejecuta al iniciar el objeto.
     private void Awake()
@@ -120,6 +147,12 @@ public class EnemigoDummy : MonoBehaviour
         // Buscamos un jugador inicial para tener objetivo temprano.
         BuscarObjetivoJugador();
 
+        // Preparamos la lista de puntos de patrulla si hace falta.
+        PrepararPuntosPatrulla();
+
+        // Elegimos el punto mas cercano para empezar la patrulla de forma natural.
+        SeleccionarPuntoPatrullaMasCercano();
+
         // Si hay puntos de patrulla configurados, arrancamos yendo al primero.
         if (puntosPatrulla != null && puntosPatrulla.Length > 0)
         {
@@ -145,6 +178,9 @@ public class EnemigoDummy : MonoBehaviour
             BuscarObjetivoJugador();
         }
 
+        // Actualizamos la vision en una frecuencia fija para reaccion consistente.
+        ActualizarVisionSiHaceFalta();
+
         // Elegimos el estado correcto segun distancias y visibilidad.
         ActualizarEstado();
 
@@ -166,6 +202,9 @@ public class EnemigoDummy : MonoBehaviour
 
             // Guardamos referencia al transform del jugador.
             objetivoJugador = candidato.transform;
+
+            // Guardamos la ultima posicion conocida para poder perseguir por memoria si se esconde.
+            ultimaPosicionVistaJugador = objetivoJugador.position;
         }
     }
 
@@ -188,6 +227,13 @@ public class EnemigoDummy : MonoBehaviour
         // Si esta lo bastante cerca para atacar, priorizamos ataque.
         if (distanciaJugador <= distanciaAtaque)
         {
+            // Si efectivamente lo vemos, actualizamos memoria de vision.
+            if (jugadorVisibleEnEsteFrame)
+            {
+                tiempoUltimaVisionJugador = Time.time;
+                ultimaPosicionVistaJugador = objetivoJugador.position;
+            }
+
             // Cambiamos al estado de ataque.
             estadoActual = EstadosEnemigo.Atacar;
 
@@ -195,9 +241,18 @@ public class EnemigoDummy : MonoBehaviour
             return;
         }
 
-        // Si esta en rango de vision y hay linea de vista, perseguimos.
-        if (distanciaJugador <= rangoVision && TieneLineaDeVisionConJugador())
+        // Si esta en rango de vision y realmente esta dentro del cono y sin obstaculos, perseguimos.
+        if (distanciaJugador <= rangoVision && jugadorVisibleEnEsteFrame)
         {
+            // Marcamos que si lo vemos en este frame.
+            jugadorVisibleEnEsteFrame = true;
+
+            // Guardamos su ultima posicion visible.
+            ultimaPosicionVistaJugador = objetivoJugador.position;
+
+            // Guardamos el instante de vision.
+            tiempoUltimaVisionJugador = Time.time;
+
             // Cambiamos al estado de persecucion.
             estadoActual = EstadosEnemigo.Perseguir;
 
@@ -205,8 +260,39 @@ public class EnemigoDummy : MonoBehaviour
             return;
         }
 
+        // Si hace poco lo vimos, seguimos persiguiendo su ultima posicion conocida.
+        if (Time.time <= tiempoUltimaVisionJugador + tiempoMemoriaVision)
+        {
+            // Mantenemos el estado de persecucion gracias a la memoria.
+            estadoActual = EstadosEnemigo.Perseguir;
+            return;
+        }
+
         // Si no cumple condiciones de vision o ataque, seguimos patrullando.
         estadoActual = EstadosEnemigo.Patrullar;
+    }
+
+    // Este metodo recalcula la vision del enemigo a intervalos fijos.
+    private void ActualizarVisionSiHaceFalta()
+    {
+        // Si no hay objetivo, marcamos vision falsa y salimos.
+        if (objetivoJugador == null)
+        {
+            jugadorVisibleEnEsteFrame = false;
+            return;
+        }
+
+        // Si todavia no toca recalcular, usamos el valor cacheado actual.
+        if (Time.time < tiempoProximoChequeoVision)
+        {
+            return;
+        }
+
+        // Guardamos cuando sera el proximo chequeo de vision.
+        tiempoProximoChequeoVision = Time.time + intervaloChequeoVision;
+
+        // Recalculamos si el jugador esta visible ahora mismo.
+        jugadorVisibleEnEsteFrame = TieneLineaDeVisionConJugador();
     }
 
     // Este metodo corre la logica segun el estado actual.
@@ -245,17 +331,21 @@ public class EnemigoDummy : MonoBehaviour
         // Permitimos que el agente se mueva.
         agenteNavMesh.isStopped = false;
 
-        // Si no hay puntos, no hacemos nada.
+        // Si no hay puntos preparados, intentamos volver a armarlos.
         if (puntosPatrulla == null || puntosPatrulla.Length == 0)
         {
-            // Salimos para evitar errores por indice invalido.
+            PrepararPuntosPatrulla();
+        }
+
+        // Si sigue sin haber puntos, no hacemos nada.
+        if (puntosPatrulla == null || puntosPatrulla.Length == 0)
+        {
             return;
         }
 
         // Si todavia esta calculando ruta, esperamos al siguiente frame.
         if (agenteNavMesh.pathPending)
         {
-            // Salimos para no tomar decisiones prematuras.
             return;
         }
 
@@ -265,8 +355,11 @@ public class EnemigoDummy : MonoBehaviour
             // Sumamos tiempo esperando en este punto.
             temporizadorEsperaPatrulla += Time.deltaTime;
 
+            // Calculamos cuanto deberia esperar en este punto puntual.
+            float tiempoEsperaReal = ObtenerTiempoEsperaPuntoActual();
+
             // Si ya espero suficiente, pasamos al siguiente punto.
-            if (temporizadorEsperaPatrulla >= tiempoEsperaEnPunto)
+            if (temporizadorEsperaPatrulla >= tiempoEsperaReal)
             {
                 // Reiniciamos el temporizador de espera.
                 temporizadorEsperaPatrulla = 0f;
@@ -278,6 +371,11 @@ public class EnemigoDummy : MonoBehaviour
                 IntentarDefinirDestino(puntosPatrulla[indicePuntoPatrulla].position);
             }
         }
+        else
+        {
+            // Si aun no llego al punto, reseteamos la espera para evitar acumulacion rara.
+            temporizadorEsperaPatrulla = 0f;
+        }
     }
 
     // Este metodo implementa el comportamiento de persecucion.
@@ -286,7 +384,6 @@ public class EnemigoDummy : MonoBehaviour
         // Si no hay objetivo, no hay a quien perseguir.
         if (objetivoJugador == null)
         {
-            // Salimos para evitar referencias nulas.
             return;
         }
 
@@ -296,8 +393,21 @@ public class EnemigoDummy : MonoBehaviour
         // Permitimos movimiento del agente.
         agenteNavMesh.isStopped = false;
 
-        // Actualizamos destino continuamente con posicion del jugador.
-        IntentarDefinirDestino(objetivoJugador.position);
+        // Si lo vemos ahora, perseguimos su posicion real.
+        if (jugadorVisibleEnEsteFrame)
+        {
+            IntentarDefinirDestino(objetivoJugador.position);
+            return;
+        }
+
+        // Si no lo vemos, perseguimos la ultima posicion donde si lo vimos.
+        IntentarDefinirDestino(ultimaPosicionVistaJugador);
+
+        // Si ya llegamos a la ultima posicion conocida y paso la memoria, volvemos a patrullar.
+        if (!agenteNavMesh.pathPending && agenteNavMesh.remainingDistance <= agenteNavMesh.stoppingDistance + 0.2f && Time.time > tiempoUltimaVisionJugador + tiempoMemoriaVision)
+        {
+            estadoActual = EstadosEnemigo.Patrullar;
+        }
     }
 
     // Este metodo implementa el comportamiento de ataque.
@@ -306,7 +416,6 @@ public class EnemigoDummy : MonoBehaviour
         // Si no hay objetivo, salimos.
         if (objetivoJugador == null)
         {
-            // Sin objetivo no podemos atacar.
             return;
         }
 
@@ -319,14 +428,12 @@ public class EnemigoDummy : MonoBehaviour
         // Si ya hay un ataque corriendo, no iniciamos otro.
         if (ataqueEnCurso)
         {
-            // Esperamos a que termine la corutina actual.
             return;
         }
 
         // Si aun no paso el cooldown, no atacamos todavia.
         if (Time.time < tiempoProximoAtaque)
         {
-            // Esperamos hasta que se cumpla el tiempo.
             return;
         }
 
@@ -349,7 +456,6 @@ public class EnemigoDummy : MonoBehaviour
         // Si el enemigo murio durante la espera, cancelamos.
         if (!vidaEnemigo.EstaVivo)
         {
-            // Limpiamos bandera y salimos.
             ataqueEnCurso = false;
             yield break;
         }
@@ -357,7 +463,6 @@ public class EnemigoDummy : MonoBehaviour
         // Si el objetivo desaparecio durante la espera, cancelamos.
         if (objetivoJugador == null)
         {
-            // Limpiamos bandera y salimos.
             ataqueEnCurso = false;
             yield break;
         }
@@ -368,7 +473,6 @@ public class EnemigoDummy : MonoBehaviour
         // Si sigue en rango de ataque, aplicamos dano.
         if (distanciaActual <= distanciaAtaque + 0.25f)
         {
-            // Ejecutamos aplicacion real de dano al jugador.
             AplicarDanioAlJugador();
         }
 
@@ -379,60 +483,17 @@ public class EnemigoDummy : MonoBehaviour
         ataqueEnCurso = false;
     }
 
-    // Este metodo aplica dano al objetivo jugador usando IRecibidorDanio.
+    // Este metodo aplica dano al objetivo jugador usando directamente VidaJugador.
     private void AplicarDanioAlJugador()
     {
-        // Si no hay objetivo valido, cortamos.
-        if (objetivoJugador == null)
+        // Si no tenemos referencia valida a la vida del jugador, cortamos.
+        if (vidaJugadorObjetivo == null || !vidaJugadorObjetivo.EstaVivo)
         {
-            // Salimos sin hacer nada.
             return;
         }
 
-        // Intentamos obtener IRecibidorDanio en el objetivo.
-        IRecibidorDanio recibidor = objetivoJugador.GetComponent<IRecibidorDanio>();
-
-        // Si no esta en el objeto raiz, buscamos en sus hijos.
-        if (recibidor == null)
-        {
-            // Buscamos en children por robustez.
-            recibidor = objetivoJugador.GetComponentInChildren<IRecibidorDanio>();
-        }
-
-        // Si no encontramos recibidor, no podemos aplicar dano.
-        if (recibidor == null)
-        {
-            // Salimos para evitar null reference.
-            return;
-        }
-
-        // Construimos los datos de dano para el sistema compartido.
-        DatosDanio datosDanio = new DatosDanio
-        {
-            // El atacante es este enemigo.
-            atacante = gameObject,
-
-            // El objetivo es el jugador detectado.
-            objetivo = objetivoJugador.gameObject,
-
-            // Dano base del ataque enemigo.
-            danioBase = danioAtaque,
-
-            // El enemigo no usa critico por zona en este ataque simple.
-            multiplicadorZona = 1f,
-
-            // Marcamos dano como cuerpo para feedback normal.
-            tipoZona = TipoZonaDanio.Cuerpo,
-
-            // Punto aproximado del impacto.
-            puntoImpacto = objetivoJugador.position + Vector3.up,
-
-            // Direccion en la que viaja el golpe.
-            direccionImpacto = (objetivoJugador.position - transform.position).normalized
-        };
-
-        // Enviamos el golpe al sistema de vida del jugador.
-        recibidor.RecibirDanio(datosDanio);
+        // Enviamos el golpe simple directamente al sistema de vida del jugador.
+        vidaJugadorObjetivo.RecibirDanio(danioAtaque);
     }
 
     // Este metodo responde al evento de muerte de VidaEnemigo.
@@ -444,14 +505,12 @@ public class EnemigoDummy : MonoBehaviour
         // Frenamos cualquier intento de navegacion.
         if (agenteNavMesh != null && agenteNavMesh.enabled)
         {
-            // Detenemos el agente.
             agenteNavMesh.isStopped = true;
         }
 
         // Si ya habia una rutina de muerte, no iniciamos otra.
         if (rutinaMuerteActiva != null)
         {
-            // Salimos para evitar dobles destrucciones.
             return;
         }
 
@@ -459,7 +518,7 @@ public class EnemigoDummy : MonoBehaviour
         rutinaMuerteActiva = StartCoroutine(RutinaMuerte());
     }
 
-    // Esta corutina hace caer al enemigo, suelta orbe y destruye el objeto.
+    // Esta corutina hace caer al enemigo y destruye el objeto.
     private IEnumerator RutinaMuerte()
     {
         // Desactivamos colliders para evitar choques raros tras morir.
@@ -468,7 +527,6 @@ public class EnemigoDummy : MonoBehaviour
         // Recorremos todos los colliders encontrados.
         for (int i = 0; i < colliders.Length; i++)
         {
-            // Apagamos cada collider para limpiar interacciones.
             colliders[i].enabled = false;
         }
 
@@ -484,24 +542,10 @@ public class EnemigoDummy : MonoBehaviour
         // Mientras no termine el tiempo de caida, interpolamos.
         while (tiempoCaida < duracionCaida)
         {
-            // Sumamos deltaTime en cada frame.
             tiempoCaida += Time.deltaTime;
-
-            // Calculamos progreso normalizado de 0 a 1.
             float progreso = Mathf.Clamp01(tiempoCaida / duracionCaida);
-
-            // Aplicamos rotacion suave entre inicio y fin.
             transform.rotation = Quaternion.Slerp(rotacionInicial, rotacionFinal, progreso);
-
-            // Esperamos al siguiente frame.
             yield return null;
-        }
-
-        // Si hay prefab de orbe configurado, lo instanciamos.
-        if (prefabOrbeExperiencia != null)
-        {
-            // Creamos la orbe en posicion del enemigo con un pequeno offset.
-            Instantiate(prefabOrbeExperiencia, transform.position + offsetOrbe, Quaternion.identity);
         }
 
         // Esperamos el tiempo configurado antes de destruir.
@@ -526,7 +570,6 @@ public class EnemigoDummy : MonoBehaviour
         // Si la direccion es casi cero, no rotamos.
         if (direccion.sqrMagnitude < 0.001f)
         {
-            // Salimos para evitar rotaciones invalidas.
             return;
         }
 
@@ -543,7 +586,27 @@ public class EnemigoDummy : MonoBehaviour
         // Si no hay objetivo, no hay vision posible.
         if (objetivoJugador == null)
         {
-            // Devolvemos falso por seguridad.
+            return false;
+        }
+
+        // Calculamos direccion horizontal hacia el jugador.
+        Vector3 direccionHorizontal = objetivoJugador.position - transform.position;
+
+        // Quitamos altura para evaluar solo el cono en el plano.
+        direccionHorizontal.y = 0f;
+
+        // Si la direccion es demasiado pequeña, no seguimos.
+        if (direccionHorizontal.sqrMagnitude < 0.001f)
+        {
+            return false;
+        }
+
+        // Calculamos el angulo entre el frente del enemigo y el jugador.
+        float anguloHaciaJugador = Vector3.Angle(transform.forward, direccionHorizontal.normalized);
+
+        // Si queda fuera del cono de vision, devolvemos falso.
+        if (anguloHaciaJugador > anguloVision * 0.5f)
+        {
             return false;
         }
 
@@ -574,17 +637,13 @@ public class EnemigoDummy : MonoBehaviour
             // Ignoramos impactos contra el mismo enemigo o sus hijos.
             if (impactos[i].transform == transform || impactos[i].transform.IsChildOf(transform))
             {
-                // Continuamos para evaluar otros impactos.
                 continue;
             }
 
             // Si este impacto esta mas cerca que el guardado, lo tomamos.
             if (impactos[i].distance < distanciaImpactoMasCercano)
             {
-                // Guardamos la nueva distancia minima.
                 distanciaImpactoMasCercano = impactos[i].distance;
-
-                // Guardamos el transform correspondiente.
                 impactoMasCercano = impactos[i].transform;
             }
         }
@@ -592,12 +651,135 @@ public class EnemigoDummy : MonoBehaviour
         // Si no hubo impacto util, consideramos que hay vision libre.
         if (impactoMasCercano == null)
         {
-            // Devolvemos verdadero por no detectar bloqueo.
             return true;
         }
 
         // Solo hay linea de vision si el primer impacto util es el jugador.
         return impactoMasCercano == objetivoJugador || impactoMasCercano.IsChildOf(objetivoJugador);
+    }
+
+    // Este metodo prepara la lista de puntos de patrulla.
+    private void PrepararPuntosPatrulla()
+    {
+        // Si ya hay puntos manuales, sincronizamos sus componentes y terminamos.
+        if (puntosPatrulla != null && puntosPatrulla.Length > 0)
+        {
+            SincronizarComponentesPuntosPatrulla();
+            return;
+        }
+
+        // Si no queremos buscar automaticamente en hijos, terminamos.
+        if (!autoBuscarPuntosPatrullaEnHijos)
+        {
+            return;
+        }
+
+        // Buscamos todos los componentes PuntoPatrulla en hijos.
+        puntosPatrullaComponentes = GetComponentsInChildren<PuntoPatrulla>();
+
+        // Si no encontramos ninguno, terminamos.
+        if (puntosPatrullaComponentes == null || puntosPatrullaComponentes.Length == 0)
+        {
+            return;
+        }
+
+        // Creamos un array de transforms del mismo tamaño.
+        puntosPatrulla = new Transform[puntosPatrullaComponentes.Length];
+
+        // Copiamos cada transform de cada punto encontrado.
+        for (int indicePunto = 0; indicePunto < puntosPatrullaComponentes.Length; indicePunto++)
+        {
+            puntosPatrulla[indicePunto] = puntosPatrullaComponentes[indicePunto].transform;
+        }
+    }
+
+    // Este metodo sincroniza el array de componentes PuntoPatrulla con el array de transforms.
+    private void SincronizarComponentesPuntosPatrulla()
+    {
+        // Si no hay array de puntos, limpiamos el cache y salimos.
+        if (puntosPatrulla == null)
+        {
+            puntosPatrullaComponentes = null;
+            return;
+        }
+
+        // Creamos el array con el mismo largo que los transforms.
+        puntosPatrullaComponentes = new PuntoPatrulla[puntosPatrulla.Length];
+
+        // Recorremos todos los transforms de patrulla.
+        for (int indicePunto = 0; indicePunto < puntosPatrulla.Length; indicePunto++)
+        {
+            // Si el transform existe, intentamos tomar su componente PuntoPatrulla.
+            if (puntosPatrulla[indicePunto] != null)
+            {
+                puntosPatrullaComponentes[indicePunto] = puntosPatrulla[indicePunto].GetComponent<PuntoPatrulla>();
+            }
+        }
+    }
+
+    // Este metodo selecciona el punto de patrulla mas cercano para arrancar de forma natural.
+    private void SeleccionarPuntoPatrullaMasCercano()
+    {
+        // Si no hay puntos validos, no hacemos nada.
+        if (puntosPatrulla == null || puntosPatrulla.Length == 0)
+        {
+            return;
+        }
+
+        // Arrancamos asumiendo que el primero es el mas cercano.
+        float mejorDistancia = float.MaxValue;
+
+        // Recorremos todos los puntos posibles.
+        for (int indicePunto = 0; indicePunto < puntosPatrulla.Length; indicePunto++)
+        {
+            // Si el punto es nulo, lo ignoramos.
+            if (puntosPatrulla[indicePunto] == null)
+            {
+                continue;
+            }
+
+            // Calculamos la distancia desde el enemigo a ese punto.
+            float distanciaActual = Vector3.Distance(transform.position, puntosPatrulla[indicePunto].position);
+
+            // Si esta distancia es mejor, actualizamos el indice actual.
+            if (distanciaActual < mejorDistancia)
+            {
+                mejorDistancia = distanciaActual;
+                indicePuntoPatrulla = indicePunto;
+            }
+        }
+    }
+
+    // Este metodo devuelve el tiempo de espera real del punto actual.
+    private float ObtenerTiempoEsperaPuntoActual()
+    {
+        // Si no hay componentes de puntos, usamos el valor por defecto del enemigo.
+        if (puntosPatrullaComponentes == null || indicePuntoPatrulla < 0 || indicePuntoPatrulla >= puntosPatrullaComponentes.Length)
+        {
+            return tiempoEsperaEnPunto;
+        }
+
+        // Si el componente actual es nulo, usamos el valor por defecto.
+        if (puntosPatrullaComponentes[indicePuntoPatrulla] == null)
+        {
+            return tiempoEsperaEnPunto;
+        }
+
+        // Devolvemos el tiempo personalizado o el por defecto segun el punto.
+        return puntosPatrullaComponentes[indicePuntoPatrulla].ObtenerTiempoEspera(tiempoEsperaEnPunto);
+    }
+
+    // Este metodo permite asignar puntos desde un editor script o desde otra herramienta.
+    public void AsignarPuntosPatrulla(Transform[] nuevosPuntos)
+    {
+        // Guardamos el nuevo array de puntos.
+        puntosPatrulla = nuevosPuntos;
+
+        // Sincronizamos el cache de componentes.
+        SincronizarComponentesPuntosPatrulla();
+
+        // Elegimos de nuevo el punto mas cercano para arrancar mejor.
+        SeleccionarPuntoPatrullaMasCercano();
     }
 
     // Este metodo define destino del agente solo si esta sobre NavMesh.
@@ -606,25 +788,24 @@ public class EnemigoDummy : MonoBehaviour
         // Si el agente no existe, no hacemos nada.
         if (agenteNavMesh == null)
         {
-            // Salimos por seguridad.
             return;
         }
 
         // Si el componente esta deshabilitado, no se puede navegar.
         if (!agenteNavMesh.enabled)
         {
-            // Salimos por seguridad.
             return;
         }
 
         // Si el agente no esta sobre una zona NavMesh valida, evitamos error.
         if (!agenteNavMesh.isOnNavMesh)
         {
-            // Salimos para evitar warnings de Unity.
             return;
         }
 
         // Asignamos el destino de navegacion.
         agenteNavMesh.SetDestination(destino);
     }
+
+    // COPILOT-EXPAND: Aqui podes agregar ataques especiales, llamadas de ayuda, evasiones y comportamientos de grupo.
 }

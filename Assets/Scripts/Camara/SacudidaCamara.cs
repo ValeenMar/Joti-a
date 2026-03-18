@@ -28,6 +28,9 @@ public class SacudidaCamara : MonoBehaviour
     // Esta variable guarda el tiempo restante de sacudida.
     private float tiempoRestante;
 
+    // Esta variable guarda cuándo se disparó una sacudida directa para evitar duplicados en el mismo frame.
+    private float tiempoUltimaSacudidaDirecta = -999f;
+
     // Estas semillas aleatorias evitan patrones repetitivos en el ruido.
     private float semillaRuidoX;
     private float semillaRuidoY;
@@ -130,11 +133,61 @@ public class SacudidaCamara : MonoBehaviour
         AplicarSacudida(intensidadBase, duracionBase);
     }
 
+    // Este metodo permite disparar una sacudida basada en la cantidad de dano recibida.
+    public void AplicarSacudidaDesdeDanio(float cantidadDanio)
+    {
+        // Convertimos dano en intensidad con limites para mantener efecto agradable.
+        float intensidadDesdeDanio = Mathf.Clamp(cantidadDanio * multiplicadorDanioAIntensidad, 0.03f, 0.22f);
+
+        // Guardamos el momento del disparo directo para no duplicar con el evento global.
+        tiempoUltimaSacudidaDirecta = Time.unscaledTime;
+
+        // Disparamos una sacudida corta y controlada.
+        AplicarSacudida(intensidadDesdeDanio, duracionBase);
+    }
+
+    // Este metodo permite saber si esta sacudida pertenece a la camara que sigue al jugador indicado.
+    public bool EstaAsociadaA(GameObject jugador)
+    {
+        // Si falta el jugador, devolvemos falso por seguridad.
+        if (jugador == null)
+        {
+            return false;
+        }
+
+        // Si no tenemos referencia de camara, intentamos resolverla antes de comparar.
+        if (camaraTercerPersona == null)
+        {
+            camaraTercerPersona = GetComponent<CamaraTercerPersona>();
+        }
+
+        // Si sigue faltando, intentamos encontrarla en el padre.
+        if (camaraTercerPersona == null)
+        {
+            camaraTercerPersona = GetComponentInParent<CamaraTercerPersona>();
+        }
+
+        // Si aun no hay camara de tercera persona, asumimos que esta sacudida puede usarse como respaldo.
+        if (camaraTercerPersona == null)
+        {
+            return true;
+        }
+
+        // Usamos el metodo de la camara para saber si esta siguiendo a este jugador.
+        return camaraTercerPersona.EstaSiguiendoJugador(jugador);
+    }
+
     // Este metodo escucha el evento cuando un jugador recibe dano.
     private void AlJugadorRecibioDanio(GameObject jugadorDanado, float cantidadDanio)
     {
         // Si no hay jugador reportado, salimos para evitar errores.
         if (jugadorDanado == null)
+        {
+            return;
+        }
+
+        // Si ya se disparo una sacudida directa hace instantes, ignoramos este eco del evento para no duplicar.
+        if (Time.unscaledTime - tiempoUltimaSacudidaDirecta <= 0.02f)
         {
             return;
         }

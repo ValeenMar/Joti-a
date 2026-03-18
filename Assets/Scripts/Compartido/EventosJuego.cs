@@ -25,6 +25,9 @@ public static class EventosJuego
     // Este evento avisa que una racha se perdió.
     public static event Action<GameObject> AlRachaPerdida;
 
+    // Este evento avisa que un jugador acaba de lanzar un ataque.
+    public static event Action<GameObject, bool> AlJugadorLanzoAtaque;
+
     // Este método dispara el evento de daño aplicado.
     public static void NotificarDanioAplicado(DatosDanio datosDanio)
     {
@@ -73,5 +76,11 @@ public static class EventosJuego
         // Si hay oyentes suscriptos, les avisamos que la racha terminó.
         AlRachaPerdida?.Invoke(jugador);
     }
-}
 
+    // Este metodo dispara el evento de ataque lanzado por el jugador.
+    public static void NotificarJugadorLanzoAtaque(GameObject jugador, bool esGolpeFuerte)
+    {
+        // Si hay oyentes suscriptos, les enviamos el jugador y si el golpe era fuerte.
+        AlJugadorLanzoAtaque?.Invoke(jugador, esGolpeFuerte);
+    }
+}

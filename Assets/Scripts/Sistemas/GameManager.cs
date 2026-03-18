@@ -1,3 +1,10 @@
+/*
+COPILOT-CONTEXT
+Proyecto: Realm Brawl.
+Motor: Unity 2022.3 LTS.
+Este script centraliza estado de partida, tiempo, kills, nivel, racha y oleadas.
+*/
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -14,11 +21,17 @@ public enum EstadoPartida
     GameOver
 }
 
-// Esta clase centraliza estado global, tiempo y conteo de kills.
+// Esta clase centraliza estado global, tiempo, kills, nivel, racha y oleadas.
 public class GameManager : MonoBehaviour
 {
     // Esta referencia permite acceso global simple al manager.
     public static GameManager Instancia { get; private set; }
+
+    // Este evento avisa cuando cambia el estado general de la partida.
+    public event Action<EstadoPartida> AlEstadoPartidaCambiado;
+
+    // Este evento avisa cuando cambia la oleada actual.
+    public event Action<int> AlOleadaActualizada;
 
     // Este valor guarda el estado actual de la partida.
     [SerializeField] private EstadoPartida estadoActual = EstadoPartida.Iniciando;
@@ -29,6 +42,9 @@ public class GameManager : MonoBehaviour
     // Esta referencia apunta al jugador principal local para UI y game over.
     [SerializeField] private GameObject jugadorPrincipal;
 
+    // Esta referencia apunta al sistema de oleadas activo en la escena.
+    [SerializeField] private SistemaOleadas sistemaOleadas;
+
     // Este valor guarda el tiempo acumulado de partida en segundos.
     [SerializeField] private float tiempoPartida = 0f;
 
@@ -37,6 +53,18 @@ public class GameManager : MonoBehaviour
 
     // Este valor guarda el nivel actual del jugador principal.
     [SerializeField] private int nivelJugadorPrincipal = 1;
+
+    // Este valor guarda la mejor racha conseguida por el jugador principal.
+    [SerializeField] private int mejorRachaJugadorPrincipal = 0;
+
+    // Este valor guarda la oleada actual del combate.
+    [SerializeField] private int oleadaActual = 0;
+
+    // Este valor guarda cuantos enemigos hay vivos en la oleada actual.
+    [SerializeField] private int enemigosVivosOleada = 0;
+
+    // Este valor guarda cuantos enemigos faltan por aparecer en la oleada actual.
+    [SerializeField] private int enemigosPendientesOleada = 0;
 
     // Este diccionario guarda kills por jugador para facilitar futuro multijugador.
     private readonly Dictionary<GameObject, int> killsPorJugador = new Dictionary<GameObject, int>();
@@ -52,6 +80,21 @@ public class GameManager : MonoBehaviour
 
     // Esta propiedad permite leer el nivel del jugador principal.
     public int NivelJugadorPrincipal => nivelJugadorPrincipal;
+
+    // Esta propiedad permite leer la mejor racha del jugador principal.
+    public int MejorRachaJugadorPrincipal => mejorRachaJugadorPrincipal;
+
+    // Esta propiedad permite leer la oleada actual.
+    public int OleadaActual => oleadaActual;
+
+    // Esta propiedad permite leer enemigos vivos de la oleada actual.
+    public int EnemigosVivosOleada => enemigosVivosOleada;
+
+    // Esta propiedad permite leer enemigos pendientes de spawn en la oleada actual.
+    public int EnemigosPendientesOleada => enemigosPendientesOleada;
+
+    // Esta propiedad expone el jugador principal actual.
+    public GameObject JugadorPrincipal => jugadorPrincipal;
 
     // Esta funcion se ejecuta cuando Unity crea el objeto.
     private void Awake()
@@ -85,10 +128,23 @@ public class GameManager : MonoBehaviour
         }
 
         // Si hay auto inicio, cambiamos el estado a Jugando.
-        if (iniciarPartidaAutomaticamente)
+        if (iniciarPartidaAutomaticamente && estadoActual != EstadoPartida.GameOver)
         {
             // Pasamos al estado principal del juego.
             CambiarEstado(EstadoPartida.Jugando);
+        }
+
+        // Si no hay sistema de oleadas asignado, intentamos detectarlo automaticamente.
+        if (sistemaOleadas == null)
+        {
+            // Buscamos el primer sistema de oleadas encontrado en la escena.
+            sistemaOleadas = FindObjectOfType<SistemaOleadas>();
+        }
+
+        // Si encontramos sistema de oleadas, lo registramos para integracion simple.
+        if (sistemaOleadas != null)
+        {
+            RegistrarSistemaOleadas(sistemaOleadas);
         }
     }
 
@@ -115,6 +171,9 @@ public class GameManager : MonoBehaviour
         // Nos suscribimos al evento de subida de nivel para actualizar dato global.
         EventosJuego.AlJugadorSubioNivel += ManejarJugadorSubioNivel;
 
+        // Nos suscribimos al evento de racha para guardar la mejor racha del jugador principal.
+        EventosJuego.AlRachaActualizada += ManejarRachaActualizada;
+
         // Nos suscribimos al evento de muerte para pasar a game over si muere jugador principal.
         EventosJuego.AlJugadorMurio += ManejarJugadorMurio;
     }
@@ -127,6 +186,9 @@ public class GameManager : MonoBehaviour
 
         // Removemos suscripcion de nivel.
         EventosJuego.AlJugadorSubioNivel -= ManejarJugadorSubioNivel;
+
+        // Removemos suscripcion de racha.
+        EventosJuego.AlRachaActualizada -= ManejarRachaActualizada;
 
         // Removemos suscripcion de muerte.
         EventosJuego.AlJugadorMurio -= ManejarJugadorMurio;
@@ -147,6 +209,15 @@ public class GameManager : MonoBehaviour
             // Actualizamos nivel global para UI o debug.
             nivelJugadorPrincipal = sistemaXP.NivelActual;
         }
+
+        // Intentamos leer su mejor racha actual si existe el sistema correspondiente.
+        SistemaRacha sistemaRacha = jugadorPrincipal != null ? jugadorPrincipal.GetComponent<SistemaRacha>() : null;
+
+        // Si existe, sincronizamos el dato global.
+        if (sistemaRacha != null)
+        {
+            mejorRachaJugadorPrincipal = sistemaRacha.MejorRacha;
+        }
     }
 
     // Este metodo cambia el estado de la partida.
@@ -161,6 +232,48 @@ public class GameManager : MonoBehaviour
 
         // Actualizamos al nuevo estado.
         estadoActual = nuevoEstado;
+
+        // Avisamos a cualquier UI o sistema que el estado cambio.
+        AlEstadoPartidaCambiado?.Invoke(estadoActual);
+    }
+
+    // Este metodo registra una nueva oleada y la expone a la UI.
+    public void RegistrarOleadaNueva(int nuevaOleada)
+    {
+        // Guardamos la oleada actual asegurando que no baje de uno.
+        oleadaActual = Mathf.Max(1, nuevaOleada);
+
+        // Avisamos a la UI que el numero de oleada cambio.
+        AlOleadaActualizada?.Invoke(oleadaActual);
+
+        // Si no estamos en game over, aseguramos que la partida siga en estado jugando.
+        if (estadoActual != EstadoPartida.GameOver)
+        {
+            CambiarEstado(EstadoPartida.Jugando);
+        }
+    }
+
+    // Este metodo permite registrar el sistema de oleadas que usa esta escena.
+    public void RegistrarSistemaOleadas(SistemaOleadas sistema)
+    {
+        // Guardamos referencia del sistema recibido para consultas futuras.
+        sistemaOleadas = sistema;
+    }
+
+    // Este metodo recibe el progreso de oleadas y actualiza datos globales.
+    public void NotificarProgresoOleada(int nuevaOleada, int enemigosVivos, int enemigosPendientes)
+    {
+        // Si la oleada cambio, usamos el flujo existente para notificar eventos.
+        if (nuevaOleada > 0 && nuevaOleada != oleadaActual)
+        {
+            RegistrarOleadaNueva(nuevaOleada);
+        }
+
+        // Guardamos cantidad de enemigos vivos reportados por el sistema.
+        enemigosVivosOleada = Mathf.Max(0, enemigosVivos);
+
+        // Guardamos cantidad de enemigos pendientes por aparecer.
+        enemigosPendientesOleada = Mathf.Max(0, enemigosPendientes);
     }
 
     // Este metodo procesa cuando se elimina un enemigo.
@@ -210,6 +323,25 @@ public class GameManager : MonoBehaviour
         nivelJugadorPrincipal = nivelNuevo;
     }
 
+    // Este metodo procesa cuando cambia la racha de un jugador.
+    private void ManejarRachaActualizada(GameObject jugador, int rachaActual)
+    {
+        // Si no tenemos jugador principal asignado, no seguimos.
+        if (jugadorPrincipal == null)
+        {
+            return;
+        }
+
+        // Si el evento no pertenece al jugador principal, ignoramos.
+        if (jugador != jugadorPrincipal)
+        {
+            return;
+        }
+
+        // Guardamos el valor mas alto alcanzado como mejor racha.
+        mejorRachaJugadorPrincipal = Mathf.Max(mejorRachaJugadorPrincipal, rachaActual);
+    }
+
     // Este metodo procesa la muerte de un jugador.
     private void ManejarJugadorMurio(GameObject jugador)
     {
@@ -241,4 +373,19 @@ public class GameManager : MonoBehaviour
         // Devolvemos el conteo actual de kills para ese jugador.
         return killsPorJugador[jugador];
     }
+
+    // Este metodo devuelve el tiempo de partida en formato amigable para UI.
+    public string ObtenerTiempoFormateado()
+    {
+        // Convertimos el tiempo total a minutos enteros.
+        int minutos = Mathf.FloorToInt(tiempoPartida / 60f);
+
+        // Convertimos el resto del tiempo a segundos enteros.
+        int segundos = Mathf.FloorToInt(tiempoPartida % 60f);
+
+        // Devolvemos el texto formateado con dos digitos.
+        return minutos.ToString("00") + ":" + segundos.ToString("00");
+    }
+
+    // COPILOT-EXPAND: Aqui podes agregar puntaje global, monedas, dificultad y soporte multijugador con Mirror.
 }

@@ -7,6 +7,24 @@ public class CamaraTercerPersona : MonoBehaviour
     // Este transform es el objetivo que la camara debe seguir (idealmente el anclaje del jugador).
     [SerializeField] private Transform objetivoSeguimiento;
 
+    // Esta opcion resetea la camara hija al centro del rig para evitar offsets raros al parentarla.
+    [SerializeField] private bool alinearCamaraHijaAutomaticamente = true;
+
+    // Este valor mueve fisicamente la camara hacia un costado para lograr sensacion de hombro.
+    [SerializeField] private float desplazamientoLateralCamara = 0.9f;
+
+    // Este valor mueve levemente el punto al que mira la camara para que el personaje no quede centrado del todo.
+    [SerializeField] private float desplazamientoLateralFoco = 0.35f;
+
+    // Esta tecla permite cambiar manualmente entre hombro derecho e izquierdo.
+    [SerializeField] private KeyCode teclaCambiarHombro = KeyCode.Q;
+
+    // Esta opcion define si el juego arranca mostrando el hombro derecho.
+    [SerializeField] private bool empezarEnHombroDerecho = true;
+
+    // Esta velocidad suaviza el cambio entre hombros para que no sea un salto brusco.
+    [SerializeField] private float velocidadCambioHombro = 6f;
+
     // Esta capa define contra que objetos se evaluara la colision de camara.
     [SerializeField] private LayerMask mascaraColision = ~0;
 
@@ -24,6 +42,9 @@ public class CamaraTercerPersona : MonoBehaviour
 
     // Esta velocidad suaviza la posicion para que la camara no se mueva a saltos.
     [SerializeField] private float suavizadoPosicion = 0.08f;
+
+    // Esta opcion define si queremos mantener suavizado extra aun siguiendo a un objetivo controlado por fisica.
+    [SerializeField] private bool usarSuavizadoPosicionConObjetivoFisico = false;
 
     // Esta velocidad suaviza la rotacion final de la camara.
     [SerializeField] private float suavizadoRotacion = 12f;
@@ -55,16 +76,48 @@ public class CamaraTercerPersona : MonoBehaviour
     // Esta referencia se usa para leer datos de la camara real.
     private Camera camaraUnity;
 
+    // Esta referencia guarda el script de movimiento del jugador seguido para usar su posicion renderizada.
+    private MovimientoJugador movimientoJugadorObjetivo;
+
+    // Esta referencia guarda la raiz real del objetivo de seguimiento.
+    private Transform raizObjetivoSeguimiento;
+
+    // Esta variable evita que el primer frame de camara arranque desde una posicion vieja o incorrecta.
+    private bool posicionInicialAplicada;
+
+    // Esta variable guarda a que hombro queremos llegar: 1 para derecho y -1 para izquierdo.
+    private float direccionHombroObjetivo;
+
+    // Esta variable guarda el valor suavizado actual del hombro.
+    private float direccionHombroSuavizada;
+
     // Esta funcion se ejecuta al iniciar para preparar referencias.
     private void Awake()
     {
         // Guardamos la referencia de la camara de Unity para uso opcional futuro.
         camaraUnity = GetComponent<Camera>();
 
+        // Si este script esta en el rig y no en la camara, buscamos una camara hija.
+        if (camaraUnity == null)
+        {
+            // Tomamos la primera camara hija encontrada dentro del rig.
+            camaraUnity = GetComponentInChildren<Camera>();
+        }
+
         // Si no se asigno objetivo en Inspector, intentamos resolver uno automaticamente.
         if (objetivoSeguimiento == null)
         {
             IntentarAsignarObjetivoAutomatico();
+        }
+
+        // Si hay una camara hija y queremos alinearla, reseteamos su transform local para que no meta offsets raros.
+        if (alinearCamaraHijaAutomaticamente && camaraUnity != null && camaraUnity.transform != transform)
+        {
+            // Colocamos la camara hija exactamente en el centro del rig.
+            camaraUnity.transform.localPosition = Vector3.zero;
+
+            // Dejamos la rotacion local en cero para que el rig controle completamente la orientacion.
+            camaraUnity.transform.localRotation = Quaternion.identity;
         }
 
         // Inicializamos angulos segun la rotacion actual para evitar saltos al entrar en Play.
@@ -74,6 +127,15 @@ public class CamaraTercerPersona : MonoBehaviour
 
         // Guardamos posicion actual como base de suavizado inicial.
         posicionSuavizada = transform.position;
+
+        // Elegimos el hombro inicial segun la configuracion del Inspector.
+        direccionHombroObjetivo = empezarEnHombroDerecho ? 1f : -1f;
+
+        // Arrancamos ya en ese mismo hombro para evitar un deslizamiento inicial innecesario.
+        direccionHombroSuavizada = direccionHombroObjetivo;
+
+        // Actualizamos referencias del objetivo seguido para saber si estamos siguiendo un Rigidbody del jugador.
+        ActualizarReferenciasObjetivo();
     }
 
     // Esta funcion corre despues del movimiento del jugador y actualiza la camara.
@@ -91,10 +153,23 @@ public class CamaraTercerPersona : MonoBehaviour
             return;
         }
 
+        // Si el objetivo cambio o sus referencias aun no estaban preparadas, las resolvemos ahora.
+        if (raizObjetivoSeguimiento == null || objetivoSeguimiento.root != raizObjetivoSeguimiento)
+        {
+            ActualizarReferenciasObjetivo();
+        }
+
         // NOTA MIRROR: este bloque de input debe correr solo en el cliente local que controla la camara.
         // En el futuro con Mirror, normalmente esto iria ligado al LocalPlayer (hasAuthority/isLocalPlayer).
         float entradaMouseX = Input.GetAxis("Mouse X");
         float entradaMouseY = Input.GetAxis("Mouse Y");
+
+        // Si se apreta la tecla configurada, alternamos entre hombro derecho e izquierdo.
+        if (Input.GetKeyDown(teclaCambiarHombro))
+        {
+            // Invertimos el valor objetivo para cambiar de lado.
+            direccionHombroObjetivo *= -1f;
+        }
 
         // Acumulamos rotacion horizontal segun movimiento del mouse y sensibilidad.
         anguloHorizontal += entradaMouseX * sensibilidadMouseX * Time.deltaTime;
@@ -108,17 +183,60 @@ public class CamaraTercerPersona : MonoBehaviour
         // Construimos la rotacion deseada en base a los angulos calculados.
         Quaternion rotacionDeseada = Quaternion.Euler(anguloVertical, anguloHorizontal, 0f);
 
-        // Guardamos el punto foco que la camara debe mirar.
-        Vector3 puntoFoco = objetivoSeguimiento.position;
+        // Suavizamos el cambio de hombro para que el pasaje de un lado al otro sea agradable.
+        direccionHombroSuavizada = Mathf.MoveTowards(direccionHombroSuavizada, direccionHombroObjetivo, velocidadCambioHombro * Time.deltaTime);
 
-        // Calculamos la posicion ideal sin obstaculos.
-        Vector3 posicionIdeal = puntoFoco - rotacionDeseada * Vector3.forward * distanciaDeseada;
+        // Calculamos un offset lateral usando el eje derecho de la rotacion actual.
+        Vector3 offsetLateral = rotacionDeseada * Vector3.right * desplazamientoLateralCamara * direccionHombroSuavizada;
+
+        // Guardamos el punto foco base usando una posicion de render estable del objetivo seguido.
+        Vector3 puntoFocoBase = ObtenerPuntoSeguimientoBase();
+
+        // Desplazamos un poco el foco hacia el mismo hombro para que el personaje no quede pegado al centro.
+        Vector3 puntoFoco = puntoFocoBase + rotacionDeseada * Vector3.right * desplazamientoLateralFoco * direccionHombroSuavizada;
+
+        // Calculamos la posicion ideal sin obstaculos, sumando el offset lateral de hombro.
+        Vector3 posicionIdeal = puntoFocoBase - rotacionDeseada * Vector3.forward * distanciaDeseada + offsetLateral;
 
         // Ajustamos la posicion ideal en caso de colision con piso o paredes.
         Vector3 posicionAjustada = AjustarPosicionPorColision(puntoFoco, posicionIdeal);
 
-        // Suavizamos la posicion para que siga al jugador sin tirones.
-        posicionSuavizada = Vector3.SmoothDamp(posicionSuavizada, posicionAjustada, ref velocidadSuavizado, suavizadoPosicion);
+        // En el primer frame valido ubicamos la camara directamente donde corresponde para evitar arranques raros.
+        if (!posicionInicialAplicada)
+        {
+            // Guardamos la posicion correcta como base interna de suavizado.
+            posicionSuavizada = posicionAjustada;
+
+            // Aplicamos la posicion correcta inmediatamente.
+            transform.position = posicionAjustada;
+
+            // Calculamos la rotacion mirando al foco desde la posicion correcta.
+            Quaternion rotacionInicial = Quaternion.LookRotation((puntoFoco - transform.position).normalized, Vector3.up);
+
+            // Aplicamos la rotacion correcta inmediatamente.
+            transform.rotation = rotacionInicial;
+
+            // Marcamos que la camara ya quedo sincronizada con el objetivo.
+            posicionInicialAplicada = true;
+
+            // Terminamos este frame porque ya colocamos la camara de forma definitiva.
+            return;
+        }
+
+        // Si seguimos a un jugador movido por fisica, por defecto evitamos una segunda capa de suavizado.
+        if (movimientoJugadorObjetivo != null && !usarSuavizadoPosicionConObjetivoFisico)
+        {
+            // Igualamos la posicion suavizada a la ajustada para mantener al jugador estable en pantalla.
+            posicionSuavizada = posicionAjustada;
+
+            // Limpiamos la velocidad interna para que no arrastre inercia vieja.
+            velocidadSuavizado = Vector3.zero;
+        }
+        else
+        {
+            // Si no es un objetivo fisico o queremos suavizado extra, usamos SmoothDamp como antes.
+            posicionSuavizada = Vector3.SmoothDamp(posicionSuavizada, posicionAjustada, ref velocidadSuavizado, suavizadoPosicion);
+        }
 
         // Aplicamos posicion final suavizada.
         transform.position = posicionSuavizada;
@@ -139,11 +257,47 @@ public class CamaraTercerPersona : MonoBehaviour
         // Calculamos la distancia maxima que intentamos recorrer con el cast.
         float distanciaMaxima = Vector3.Distance(puntoOrigen, posicionObjetivoSinColision);
 
-        // Ejecutamos SphereCast para detectar si hay un obstaculo en el camino de la camara.
-        if (Physics.SphereCast(puntoOrigen, radioColision, direccion, out RaycastHit golpe, distanciaMaxima, mascaraColision, QueryTriggerInteraction.Ignore))
+        // Guardamos la distancia del obstaculo valido mas cercano.
+        float distanciaGolpeMasCercano = float.MaxValue;
+
+        // Esta bandera indica si realmente encontramos un obstaculo valido.
+        bool encontroObstaculoValido = false;
+
+        // Ejecutamos SphereCastAll para poder ignorar los colliders del propio jugador seguido.
+        RaycastHit[] golpes = Physics.SphereCastAll(puntoOrigen, radioColision, direccion, distanciaMaxima, mascaraColision, QueryTriggerInteraction.Ignore);
+
+        // Recorremos todos los impactos encontrados.
+        for (int indiceGolpe = 0; indiceGolpe < golpes.Length; indiceGolpe++)
         {
-            // Si hubo golpe, reducimos la distancia para ubicar la camara delante del obstaculo.
-            float distanciaSegura = Mathf.Max(distanciaMinima, golpe.distance - margenSeparacion);
+            // Si el golpe pertenece al jugador que seguimos o a alguno de sus hijos, lo ignoramos.
+            if (objetivoSeguimiento != null)
+            {
+                // Guardamos la raiz del objetivo para comparar sin importar si seguimos un anclaje hijo.
+                Transform raizObjetivo = objetivoSeguimiento.root;
+
+                // Si el collider golpeado pertenece al mismo jugador, seguimos buscando otro obstaculo.
+                if (golpes[indiceGolpe].transform == raizObjetivo || golpes[indiceGolpe].transform.IsChildOf(raizObjetivo))
+                {
+                    continue;
+                }
+            }
+
+            // Si este golpe esta mas cerca que los anteriores, lo guardamos como el mas importante.
+            if (golpes[indiceGolpe].distance < distanciaGolpeMasCercano)
+            {
+                // Guardamos la nueva distancia util mas corta.
+                distanciaGolpeMasCercano = golpes[indiceGolpe].distance;
+
+                // Marcamos que ya encontramos un obstaculo que si hay que respetar.
+                encontroObstaculoValido = true;
+            }
+        }
+
+        // Si encontramos un obstaculo real, reducimos la distancia para quedar delante de el.
+        if (encontroObstaculoValido)
+        {
+            // Calculamos una distancia segura sin pegarnos demasiado ni atravesar el obstaculo.
+            float distanciaSegura = Mathf.Max(distanciaMinima, distanciaGolpeMasCercano - margenSeparacion);
 
             // Devolvemos la posicion segura evitando clipping.
             return puntoOrigen + direccion * distanciaSegura;
@@ -178,11 +332,13 @@ public class CamaraTercerPersona : MonoBehaviour
         if (anclaje != null)
         {
             objetivoSeguimiento = anclaje.ObtenerObjetivoCamara();
+            ActualizarReferenciasObjetivo();
             return;
         }
 
         // Si no tiene anclaje, seguimos directamente el transform del jugador.
         objetivoSeguimiento = posibleJugador.transform;
+        ActualizarReferenciasObjetivo();
     }
 
     // Este metodo permite asignar el objetivo manualmente desde otros scripts.
@@ -190,6 +346,16 @@ public class CamaraTercerPersona : MonoBehaviour
     {
         // Guardamos el nuevo objetivo de seguimiento.
         objetivoSeguimiento = nuevoObjetivo;
+
+        // Actualizamos referencias internas para que el seguimiento no quede apuntando a datos viejos.
+        ActualizarReferenciasObjetivo();
+    }
+
+    // Este metodo publico permite cambiar de hombro desde otros scripts si algun dia lo necesitamos.
+    public void CambiarHombro()
+    {
+        // Invertimos el hombro objetivo actual.
+        direccionHombroObjetivo *= -1f;
     }
 
     // Este metodo permite saber si esta camara esta siguiendo al jugador indicado.
@@ -203,6 +369,63 @@ public class CamaraTercerPersona : MonoBehaviour
 
         // Comparamos por raiz de jerarquia para cubrir casos con anclaje hijo.
         return objetivoSeguimiento.root == jugador.transform.root;
+    }
+
+    // Este metodo actualiza referencias internas del objetivo para saber si seguimos un jugador fisico.
+    private void ActualizarReferenciasObjetivo()
+    {
+        // Si no hay objetivo valido, limpiamos referencias y salimos.
+        if (objetivoSeguimiento == null)
+        {
+            raizObjetivoSeguimiento = null;
+            movimientoJugadorObjetivo = null;
+            return;
+        }
+
+        // Guardamos la raiz real del objetivo para comparar y buscar componentes del jugador.
+        raizObjetivoSeguimiento = objetivoSeguimiento.root;
+
+        // Si no hay raiz valida, limpiamos referencia de movimiento y salimos.
+        if (raizObjetivoSeguimiento == null)
+        {
+            movimientoJugadorObjetivo = null;
+            return;
+        }
+
+        // Intentamos obtener el script de movimiento del jugador seguido.
+        movimientoJugadorObjetivo = raizObjetivoSeguimiento.GetComponent<MovimientoJugador>();
+    }
+
+    // Este metodo devuelve un punto de seguimiento estable para render.
+    private Vector3 ObtenerPuntoSeguimientoBase()
+    {
+        // Si no hay objetivo valido, usamos la posicion actual del rig como respaldo.
+        if (objetivoSeguimiento == null)
+        {
+            return transform.position;
+        }
+
+        // Si no estamos siguiendo a un MovimientoJugador, usamos la posicion del objetivo como siempre.
+        if (movimientoJugadorObjetivo == null || raizObjetivoSeguimiento == null)
+        {
+            return objetivoSeguimiento.position;
+        }
+
+        // Si seguimos exactamente la raiz del jugador, pedimos su posicion interpolada para render.
+        if (objetivoSeguimiento == raizObjetivoSeguimiento)
+        {
+            return movimientoJugadorObjetivo.ObtenerPosicionInterpoladaParaRender();
+        }
+
+        // Si seguimos un hijo del jugador, convertimos su offset local a mundo usando la posicion interpolada del jugador.
+        if (objetivoSeguimiento.IsChildOf(raizObjetivoSeguimiento))
+        {
+            Vector3 offsetLocalHastaObjetivo = raizObjetivoSeguimiento.InverseTransformPoint(objetivoSeguimiento.position);
+            return movimientoJugadorObjetivo.ObtenerPosicionInterpoladaConOffsetLocal(offsetLocalHastaObjetivo);
+        }
+
+        // Si no encaja en ningun caso anterior, devolvemos la posicion del objetivo directamente.
+        return objetivoSeguimiento.position;
     }
 
     // Este metodo dibuja gizmos utiles para depurar distancia y colision en el editor.
@@ -227,4 +450,3 @@ public class CamaraTercerPersona : MonoBehaviour
         Gizmos.DrawWireSphere(transform.position, radioColision);
     }
 }
-

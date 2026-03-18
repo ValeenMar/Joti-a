@@ -13,6 +13,9 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
     // Esta variable define cuanta experiencia entrega al morir.
     [SerializeField] private int experienciaOtorgada = 25;
 
+    // Esta variable publica te deja arrastrar desde el Inspector el prefab de la orbe de experiencia.
+    public GameObject prefabOrbeExperiencia;
+
     // Esta variable evita procesar dano una vez que el enemigo ya murio.
     private bool estaMuerto;
 
@@ -100,6 +103,13 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
         // Marcamos al enemigo como muerto para bloquear logica futura.
         estaMuerto = true;
 
+        // Si hay un prefab de orbe asignado, lo instanciamos justo en la posicion del enemigo.
+        if (prefabOrbeExperiencia != null)
+        {
+            // Creamos la orbe en el mismo lugar donde murio el enemigo.
+            Instantiate(prefabOrbeExperiencia, transform.position, Quaternion.identity);
+        }
+
         // En Mirror, esta notificacion deberia salir desde el servidor con autoridad.
         // [Mirror futuro] Este bloque seria llamado desde un [Command] validado por servidor.
         EventosJuego.NotificarEnemigoEliminado(datosDanio.atacante, gameObject, experienciaOtorgada);
@@ -108,4 +118,3 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
         AlMorir?.Invoke(datosDanio);
     }
 }
-

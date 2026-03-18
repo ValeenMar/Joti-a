@@ -27,6 +27,13 @@ public class FeedbackCombate : MonoBehaviour
     // Esta variable indica si tambien se toca el color de emision.
     [SerializeField] private bool usarEmision = true;
 
+    // Este color se usa como indicador suave cuando el enemigo esta dentro del rango de ataque.
+    [SerializeField] private Color colorIndicadorRango = new Color(1f, 0.35f, 0.35f, 1f);
+
+    // Esta variable controla cuanto se mezcla el indicador de rango con el color original.
+    [Range(0f, 1f)]
+    [SerializeField] private float intensidadIndicadorRango = 0.35f;
+
     // Esta lista guarda materiales para evitar buscarlos en cada golpe.
     private readonly List<Material> materiales = new List<Material>();
 
@@ -35,6 +42,9 @@ public class FeedbackCombate : MonoBehaviour
 
     // Esta referencia guarda la corrutina de destello actual.
     private Coroutine corrutinaDestelloActiva;
+
+    // Esta variable indica si el enemigo esta resaltado por estar en rango de ataque.
+    private bool indicadorRangoActivo;
 
     // Esta funcion se ejecuta una vez al activar el objeto.
     private void Awake()
@@ -63,6 +73,25 @@ public class FeedbackCombate : MonoBehaviour
 
         // Lanzamos una nueva animacion de destello.
         corrutinaDestelloActiva = StartCoroutine(CorrutinaDestello(colorDestino));
+    }
+
+    // Esta funcion permite encender o apagar el indicador suave de rango.
+    public void EstablecerIndicadorRango(bool activo)
+    {
+        // Si no hubo cambio real, no hace falta recalcular materiales.
+        if (indicadorRangoActivo == activo)
+        {
+            return;
+        }
+
+        // Guardamos el nuevo estado del indicador.
+        indicadorRangoActivo = activo;
+
+        // Si ahora mismo no hay un destello golpeando el material, actualizamos el color base visible.
+        if (corrutinaDestelloActiva == null)
+        {
+            AplicarColoresBaseSegunEstado();
+        }
     }
 
     // Esta funcion recorre renderizadores y guarda materiales con sus colores base.
@@ -149,20 +178,36 @@ public class FeedbackCombate : MonoBehaviour
         yield return new WaitForSeconds(duracionDestello);
 
         // Restauramos los colores originales.
+        AplicarColoresBaseSegunEstado();
+
+        // Limpiamos referencia para saber que ya termino.
+        corrutinaDestelloActiva = null;
+    }
+
+    // Esta funcion aplica el color base correcto segun si el enemigo esta o no dentro del rango de ataque.
+    private void AplicarColoresBaseSegunEstado()
+    {
+        // Recorremos todos los materiales conocidos.
         for (int indice = 0; indice < materiales.Count; indice++)
         {
-            // Volvemos al color original para no dejar el material alterado.
-            EscribirColorPrincipal(materiales[indice], coloresOriginales[indice]);
+            // Partimos siempre del color original capturado al iniciar.
+            Color colorBase = coloresOriginales[indice];
 
-            // Si usamos emision, tambien restauramos emision.
+            // Si el indicador de rango esta activo, lo mezclamos suavemente con rojo tenue.
+            if (indicadorRangoActivo)
+            {
+                colorBase = Color.Lerp(colorBase, colorIndicadorRango, intensidadIndicadorRango);
+            }
+
+            // Escribimos el color base final en el material.
+            EscribirColorPrincipal(materiales[indice], colorBase);
+
+            // Si usamos emision y el shader la soporta, la dejamos apagada mientras no haya un golpe.
             if (usarEmision && materiales[indice].HasProperty("_EmissionColor"))
             {
                 materiales[indice].SetColor("_EmissionColor", Color.black);
             }
         }
-
-        // Limpiamos referencia para saber que ya termino.
-        corrutinaDestelloActiva = null;
     }
 
     // Esta funcion intenta leer el color principal de un material.
@@ -200,4 +245,3 @@ public class FeedbackCombate : MonoBehaviour
         }
     }
 }
-
