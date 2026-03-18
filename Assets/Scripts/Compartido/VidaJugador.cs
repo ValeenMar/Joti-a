@@ -1,6 +1,8 @@
 using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 
 // COPILOT-CONTEXT:
 // Proyecto: Realm Brawl.
@@ -11,6 +13,9 @@ using UnityEngine.UI;
 // Esta clase representa la vida del jugador, actualiza su barra visual y procesa el daño recibido.
 public class VidaJugador : MonoBehaviour, IRecibidorDanio
 {
+    // Este arreglo define nombres comunes para buscar la barra de vida en UI.
+    private static readonly string[] nombresBarraVidaCandidata = { "BarraVida", "SliderVida", "VidaBarra", "HealthBar" };
+
     // Este evento avisa a otros sistemas cuando cambia la vida actual del jugador.
     public event Action<float, float> AlVidaActualizada;
 
@@ -52,6 +57,12 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     // Esta variable guarda hasta cuando el jugador sigue protegido contra dano extra.
     private float tiempoFinInvencibilidadDanio;
 
+    // Esta variable limita cada cuanto reintentamos vincular UI para no gastar de mas.
+    private float tiempoProximoReintentoUI;
+
+    // Esta variable evita lanzar varias corutinas de reintento al mismo tiempo.
+    private bool reintentoUIEnCurso;
+
     // Esta propiedad permite leer la vida actual desde otros scripts.
     public float VidaActual => vidaActual;
 
@@ -67,18 +78,14 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     // Esta función se ejecuta al activar el objeto.
     private void Awake()
     {
-        // Si no asignaste la imagen de relleno pero sí la barra, intentamos encontrarla automáticamente.
-        if (imagenRellenoBarra == null && barraVida != null && barraVida.fillRect != null)
-        {
-            // Tomamos la imagen del Fill del Slider para poder cambiar su color desde código.
-            imagenRellenoBarra = barraVida.fillRect.GetComponent<Image>();
-        }
-
         // Al iniciar, aseguramos que la vida actual arranque llena y dentro de límites válidos.
         vidaActual = Mathf.Clamp(vidaMaxima, 0f, vidaMaxima);
 
         // Buscamos las cámaras con sacudida para poder llamarlas si existen.
         sacudidasCamaraDisponibles = FindObjectsOfType<SacudidaCamara>(true);
+
+        // Intentamos vincular referencias de UI por si ya existe el HUD en escena.
+        IntentarVincularUI(true);
 
         // Actualizamos la barra una vez al inicio para que arranque correcta.
         ActualizarVisualBarraVida();
@@ -87,9 +94,39 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
         NotificarCambioVida();
     }
 
+    // Esta funcion se ejecuta cuando el componente queda activo en escena.
+    private void OnEnable()
+    {
+        // Nos suscribimos al cambio de escena para re-vincular UI tras LoadScene.
+        SceneManager.sceneLoaded += ManejarEscenaCargada;
+    }
+
+    // Esta funcion se ejecuta cuando el componente se desactiva.
+    private void OnDisable()
+    {
+        // Quitamos suscripcion para evitar callbacks sobre objetos desactivados.
+        SceneManager.sceneLoaded -= ManejarEscenaCargada;
+    }
+
+    // Esta funcion corre despues de Awake y ayuda a re-vincular cuando el HUD aparece tarde.
+    private void Start()
+    {
+        // Intentamos una segunda vinculacion por si la UI se creo entre Awake y Start.
+        IntentarVincularUI(true);
+
+        // Si faltan referencias, empezamos un ciclo corto de reintentos.
+        if (!TieneReferenciasUIValidas())
+        {
+            StartCoroutine(RutinaReintentarVinculacionUI(12, 0.2f));
+        }
+    }
+
     // Esta función se ejecuta cada frame para animar el pulso de peligro de la barra.
     private void Update()
     {
+        // Si la UI se perdio por cambio de escena o destruccion, reintentamos vincularla.
+        ReintentarVinculacionUIEnUpdate();
+
         // Refrescamos la parte visual de la vida para que el pulso se vea en tiempo real.
         ActualizarVisualBarraVida();
     }
@@ -298,6 +335,12 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     // Este método actualiza el Slider y el color visual de la barra de vida.
     private void ActualizarVisualBarraVida()
     {
+        // Si faltan referencias, intentamos recuperarlas antes de tocar UI.
+        if (!TieneReferenciasUIValidas())
+        {
+            IntentarVincularUI(false);
+        }
+
         // Si existe una barra asignada, mantenemos sus límites y su valor actualizados.
         if (barraVida != null)
         {
@@ -345,6 +388,193 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     {
         // Lanzamos el evento con vida actual y maxima.
         AlVidaActualizada?.Invoke(vidaActual, vidaMaxima);
+    }
+
+    // Este metodo decide si ya tenemos la UI minima para actualizar barra y color.
+    private bool TieneReferenciasUIValidas()
+    {
+        // Si no hay slider, no hay UI de vida funcional.
+        if (barraVida == null)
+        {
+            return false;
+        }
+
+        // Si hay slider, intentamos obtener fill cuando falte para color dinamico.
+        if (imagenRellenoBarra == null && barraVida.fillRect != null)
+        {
+            imagenRellenoBarra = barraVida.fillRect.GetComponent<Image>();
+        }
+
+        // Pedimos slider y fill para considerar la UI completamente vinculada.
+        return barraVida != null && imagenRellenoBarra != null;
+    }
+
+    // Este metodo intenta vincular slider e imagen con varias estrategias de fallback.
+    private void IntentarVincularUI(bool permitirBusquedaAmplia)
+    {
+        // Si falta slider, intentamos por nombres conocidos con GameObject.Find.
+        if (barraVida == null)
+        {
+            for (int indiceNombre = 0; indiceNombre < nombresBarraVidaCandidata.Length; indiceNombre++)
+            {
+                GameObject objetoCandidato = GameObject.Find(nombresBarraVidaCandidata[indiceNombre]);
+                if (objetoCandidato == null)
+                {
+                    continue;
+                }
+
+                Slider sliderCandidato = objetoCandidato.GetComponent<Slider>();
+                if (sliderCandidato == null)
+                {
+                    sliderCandidato = objetoCandidato.GetComponentInChildren<Slider>(true);
+                }
+
+                if (sliderCandidato != null)
+                {
+                    barraVida = sliderCandidato;
+                    break;
+                }
+            }
+        }
+
+        // Si todavia falta slider, intentamos encontrarlo por tipo y nombre.
+        if (barraVida == null && permitirBusquedaAmplia)
+        {
+            Slider[] slidersEscena = FindObjectsOfType<Slider>(true);
+            for (int indiceSlider = 0; indiceSlider < slidersEscena.Length; indiceSlider++)
+            {
+                if (slidersEscena[indiceSlider] == null)
+                {
+                    continue;
+                }
+
+                string nombre = slidersEscena[indiceSlider].name.ToLowerInvariant();
+                if (nombre.Contains("vida") || nombre.Contains("health"))
+                {
+                    barraVida = slidersEscena[indiceSlider];
+                    break;
+                }
+            }
+        }
+
+        // Fallback final pedido: buscamos cualquier slider activo/inactivo.
+        if (barraVida == null && permitirBusquedaAmplia)
+        {
+            barraVida = FindObjectOfType<Slider>(true);
+        }
+
+        // Si falta imagen de relleno, intentamos tomarla del fillRect del slider.
+        if (imagenRellenoBarra == null && barraVida != null && barraVida.fillRect != null)
+        {
+            imagenRellenoBarra = barraVida.fillRect.GetComponent<Image>();
+        }
+
+        // Si sigue faltando fill, intentamos ubicar un hijo llamado Fill.
+        if (imagenRellenoBarra == null && barraVida != null)
+        {
+            Transform fillDirecto = barraVida.transform.Find("Fill Area/Fill");
+            if (fillDirecto == null)
+            {
+                fillDirecto = barraVida.transform.Find("Fill");
+            }
+
+            if (fillDirecto != null)
+            {
+                imagenRellenoBarra = fillDirecto.GetComponent<Image>();
+            }
+        }
+
+        // Si aun falta fill y se permite busqueda amplia, probamos por nombre en toda la escena.
+        if (imagenRellenoBarra == null && permitirBusquedaAmplia)
+        {
+            Image[] imagenesEscena = FindObjectsOfType<Image>(true);
+            for (int indiceImagen = 0; indiceImagen < imagenesEscena.Length; indiceImagen++)
+            {
+                if (imagenesEscena[indiceImagen] == null)
+                {
+                    continue;
+                }
+
+                string nombre = imagenesEscena[indiceImagen].name.ToLowerInvariant();
+                if (nombre.Contains("fill") && (nombre.Contains("vida") || nombre.Contains("health")))
+                {
+                    imagenRellenoBarra = imagenesEscena[indiceImagen];
+                    break;
+                }
+            }
+        }
+    }
+
+    // Este metodo reintenta vinculacion desde Update con un intervalo razonable.
+    private void ReintentarVinculacionUIEnUpdate()
+    {
+        // Si ya estan slider y fill validos, no hace falta reintentar.
+        if (TieneReferenciasUIValidas())
+        {
+            return;
+        }
+
+        // Si aun no toca reintentar, salimos para evitar busquedas cada frame.
+        if (Time.unscaledTime < tiempoProximoReintentoUI)
+        {
+            return;
+        }
+
+        // Definimos proximo intento.
+        tiempoProximoReintentoUI = Time.unscaledTime + 0.5f;
+
+        // Reintentamos con busqueda amplia.
+        IntentarVincularUI(true);
+    }
+
+    // Esta corutina reintenta varias veces para cubrir UI que aparece con retraso.
+    private IEnumerator RutinaReintentarVinculacionUI(int cantidadIntentos, float esperaEntreIntentos)
+    {
+        // Evitamos duplicar corutinas si ya hay una corriendo.
+        if (reintentoUIEnCurso)
+        {
+            yield break;
+        }
+
+        // Marcamos que hay reintento activo.
+        reintentoUIEnCurso = true;
+
+        // Reintentamos una cantidad limitada de veces.
+        for (int intento = 0; intento < cantidadIntentos; intento++)
+        {
+            // Si ya tenemos slider, cortamos.
+            if (barraVida != null)
+            {
+                break;
+            }
+
+            // Probamos vincular con busqueda amplia.
+            IntentarVincularUI(true);
+
+            // Esperamos antes del siguiente intento.
+            yield return new WaitForSecondsRealtime(esperaEntreIntentos);
+        }
+
+        // Marcamos fin del reintento.
+        reintentoUIEnCurso = false;
+    }
+
+    // Este callback se ejecuta al terminar de cargar una escena nueva.
+    private void ManejarEscenaCargada(Scene escenaCargada, LoadSceneMode modoCarga)
+    {
+        // Limpiamos referencias para forzar re-vinculacion en la escena nueva.
+        barraVida = null;
+        imagenRellenoBarra = null;
+        tiempoProximoReintentoUI = 0f;
+
+        // Intentamos vincular de inmediato.
+        IntentarVincularUI(true);
+
+        // Si no alcanza, dejamos una rutina de reintento.
+        if (gameObject.activeInHierarchy)
+        {
+            StartCoroutine(RutinaReintentarVinculacionUI(15, 0.2f));
+        }
     }
 
     // Este método concentra lo que pasa cuando la vida llega a cero.

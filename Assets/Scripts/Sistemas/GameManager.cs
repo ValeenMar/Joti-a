@@ -7,6 +7,7 @@ Este script centraliza estado de partida, tiempo, kills, nivel, racha y oleadas.
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 // Este enum define los estados basicos de la partida.
 public enum EstadoPartida
@@ -109,16 +110,28 @@ public class GameManager : MonoBehaviour
 
         // Guardamos esta instancia como unica.
         Instancia = this;
+
+        // Aseguramos tiempo normal al entrar en escena, incluso si venimos de un game over.
+        Time.timeScale = 1f;
+
+        // Reiniciamos estado runtime para evitar arrastrar datos entre recargas.
+        ResetearEstadoPartida();
     }
 
     // Esta funcion se ejecuta al iniciar la escena.
     private void Start()
     {
+        // Reenganchamos referencias de esta escena por si el reload destruyó las anteriores.
+        ReasignarReferenciasDeEscena();
+
+        // Dejamos el cursor en modo juego al comenzar una nueva partida.
+        ConfigurarCursorModoJuego();
+
         // Si aun no hay jugador principal, intentamos detectar uno automaticamente.
         if (jugadorPrincipal == null)
         {
             // Buscamos el primer VidaJugador disponible para tomarlo como jugador principal.
-            VidaJugador vidaJugador = FindObjectOfType<VidaJugador>();
+            VidaJugador vidaJugador = FindObjectOfType<VidaJugador>(true);
 
             // Si encontramos uno, lo registramos.
             if (vidaJugador != null)
@@ -176,6 +189,9 @@ public class GameManager : MonoBehaviour
 
         // Nos suscribimos al evento de muerte para pasar a game over si muere jugador principal.
         EventosJuego.AlJugadorMurio += ManejarJugadorMurio;
+
+        // Nos suscribimos al evento de escena cargada para rearmar estado limpio post-restart.
+        SceneManager.sceneLoaded += ManejarEscenaCargada;
     }
 
     // Esta funcion se ejecuta al desactivar el componente.
@@ -192,6 +208,19 @@ public class GameManager : MonoBehaviour
 
         // Removemos suscripcion de muerte.
         EventosJuego.AlJugadorMurio -= ManejarJugadorMurio;
+
+        // Removemos suscripcion de escena cargada.
+        SceneManager.sceneLoaded -= ManejarEscenaCargada;
+    }
+
+    // Esta funcion limpia la referencia singleton al destruir este objeto.
+    private void OnDestroy()
+    {
+        // Solo limpiamos la instancia si este objeto era la instancia activa.
+        if (Instancia == this)
+        {
+            Instancia = null;
+        }
     }
 
     // Este metodo permite asignar o cambiar el jugador principal durante runtime.
@@ -233,8 +262,35 @@ public class GameManager : MonoBehaviour
         // Actualizamos al nuevo estado.
         estadoActual = nuevoEstado;
 
+        // Ajustamos cursor segun el estado actual para que no quede libre en gameplay.
+        if (estadoActual == EstadoPartida.GameOver)
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+        else
+        {
+            ConfigurarCursorModoJuego();
+        }
+
         // Avisamos a cualquier UI o sistema que el estado cambio.
         AlEstadoPartidaCambiado?.Invoke(estadoActual);
+    }
+
+    // Este metodo centraliza un reinicio limpio de la escena actual.
+    public void ReiniciarPartida()
+    {
+        // Dejamos el tiempo normal antes de recargar para evitar escena congelada.
+        Time.timeScale = 1f;
+
+        // Rebloqueamos cursor para volver al modo gameplay al entrar en la nueva escena.
+        ConfigurarCursorModoJuego();
+
+        // Obtenemos la escena activa actual.
+        Scene escenaActual = SceneManager.GetActiveScene();
+
+        // Recargamos la misma escena usando su indice.
+        SceneManager.LoadScene(escenaActual.buildIndex);
     }
 
     // Este metodo registra una nueva oleada y la expone a la UI.
@@ -388,4 +444,80 @@ public class GameManager : MonoBehaviour
     }
 
     // COPILOT-EXPAND: Aqui podes agregar puntaje global, monedas, dificultad y soporte multijugador con Mirror.
+
+    // Este metodo reinicia todos los datos runtime del manager.
+    private void ResetearEstadoPartida()
+    {
+        // Volvemos al estado inicial de partida.
+        estadoActual = EstadoPartida.Iniciando;
+
+        // Reiniciamos contadores globales.
+        tiempoPartida = 0f;
+        killsTotales = 0;
+        nivelJugadorPrincipal = 1;
+        mejorRachaJugadorPrincipal = 0;
+        oleadaActual = 0;
+        enemigosVivosOleada = 0;
+        enemigosPendientesOleada = 0;
+
+        // Limpiamos referencias runtime de escena previa.
+        jugadorPrincipal = null;
+        sistemaOleadas = null;
+
+        // Limpiamos estadisticas por jugador.
+        killsPorJugador.Clear();
+    }
+
+    // Este metodo corre cada vez que Unity termina de cargar una escena.
+    private void ManejarEscenaCargada(Scene escenaCargada, LoadSceneMode modoCarga)
+    {
+        // Aseguramos tiempo normal por seguridad extra tras cualquier recarga.
+        Time.timeScale = 1f;
+
+        // Rebloqueamos cursor para que el jugador retome control inmediato.
+        ConfigurarCursorModoJuego();
+
+        // Limpiamos estado runtime para evitar arrastre de datos post-restart.
+        ResetearEstadoPartida();
+
+        // Volvemos a enlazar referencias dinamicas de la escena nueva.
+        ReasignarReferenciasDeEscena();
+
+        // Si auto inicio esta activo, volvemos al estado jugando.
+        if (iniciarPartidaAutomaticamente)
+        {
+            CambiarEstado(EstadoPartida.Jugando);
+        }
+    }
+
+    // Este metodo deja el cursor en modo juego.
+    private void ConfigurarCursorModoJuego()
+    {
+        // Bloqueamos cursor al centro para control con mouse.
+        Cursor.lockState = CursorLockMode.Locked;
+
+        // Ocultamos cursor en gameplay.
+        Cursor.visible = false;
+    }
+
+    // Este metodo reintenta enlazar jugador y sistema de oleadas dentro de la escena cargada.
+    private void ReasignarReferenciasDeEscena()
+    {
+        // Si falta el jugador principal, buscamos uno activo o inactivo.
+        if (jugadorPrincipal == null)
+        {
+            VidaJugador vidaJugador = FindObjectOfType<VidaJugador>(true);
+
+            if (vidaJugador != null)
+            {
+                RegistrarJugadorPrincipal(vidaJugador.gameObject);
+            }
+        }
+
+        // Si falta el sistema de oleadas, lo buscamos otra vez en la escena actual.
+        if (sistemaOleadas == null)
+        {
+            sistemaOleadas = FindObjectOfType<SistemaOleadas>(true);
+        }
+    }
 }

@@ -64,11 +64,8 @@ public class PantallaGameOver : MonoBehaviour
         // Intentamos encontrar GameManager si todavia no estaba cacheado.
         IntentarEncontrarGameManager();
 
-        // Si existe GameManager, nos suscribimos a sus cambios de estado.
-        if (gameManager != null)
-        {
-            gameManager.AlEstadoPartidaCambiado += ManejarCambioEstadoPartida;
-        }
+        // Escuchamos recarga de escena para restaurar estado visual limpio.
+        SceneManager.sceneLoaded += ManejarEscenaCargada;
     }
 
     // Esta funcion se ejecuta al deshabilitar el objeto y limpia eventos.
@@ -82,6 +79,9 @@ public class PantallaGameOver : MonoBehaviour
 
         // Restauramos el tiempo por seguridad al salir.
         Time.timeScale = 1f;
+
+        // Dejamos de escuchar carga de escenas para evitar suscripciones duplicadas.
+        SceneManager.sceneLoaded -= ManejarEscenaCargada;
     }
 
     // Esta funcion corre cada frame para reintentar encontrar GameManager si aparece mas tarde.
@@ -152,6 +152,9 @@ public class PantallaGameOver : MonoBehaviour
 
         // Frenamos el tiempo para que el juego quede congelado en el final.
         Time.timeScale = 0f;
+
+        // Liberamos cursor para que se pueda interactuar con los botones de UI.
+        ConfigurarCursorModoUI();
     }
 
     // Este metodo oculta solo la parte visual del panel.
@@ -216,12 +219,57 @@ public class PantallaGameOver : MonoBehaviour
         // Restauramos el tiempo normal antes de recargar.
         Time.timeScale = 1f;
 
-        // Obtenemos la escena actual.
-        Scene escenaActual = SceneManager.GetActiveScene();
+        // Rebloqueamos cursor para volver al control de juego.
+        ConfigurarCursorModoJuego();
 
-        // Recargamos esa misma escena por su indice.
+        // Si tenemos manager, usamos su metodo centralizado de reinicio limpio.
+        if (gameManager != null)
+        {
+            gameManager.ReiniciarPartida();
+            return;
+        }
+
+        // Si no habia manager, hacemos fallback directo de recarga.
+        Scene escenaActual = SceneManager.GetActiveScene();
         SceneManager.LoadScene(escenaActual.buildIndex);
     }
 
     // COPILOT-EXPAND: Aqui podes agregar boton de volver al menu, compartir puntaje y tabla de resultados cooperativa.
+
+    // Este metodo se ejecuta cuando Unity termina de cargar una escena.
+    private void ManejarEscenaCargada(Scene escenaCargada, LoadSceneMode modoCarga)
+    {
+        // Dejamos tiempo normal por seguridad para evitar congelamiento post-restart.
+        Time.timeScale = 1f;
+
+        // Ocultamos panel en una escena nueva para iniciar limpio.
+        OcultarPanelVisual();
+
+        // Rebloqueamos cursor para modo juego.
+        ConfigurarCursorModoJuego();
+
+        // Reintentamos enlazar GameManager de la nueva escena.
+        gameManager = null;
+        IntentarEncontrarGameManager();
+    }
+
+    // Este metodo configura cursor para interaccion de menus.
+    private void ConfigurarCursorModoUI()
+    {
+        // Soltamos el cursor para poder usar botones.
+        Cursor.lockState = CursorLockMode.None;
+
+        // Mostramos el cursor en pantalla.
+        Cursor.visible = true;
+    }
+
+    // Este metodo configura cursor para gameplay.
+    private void ConfigurarCursorModoJuego()
+    {
+        // Bloqueamos el cursor al centro.
+        Cursor.lockState = CursorLockMode.Locked;
+
+        // Ocultamos el cursor durante juego.
+        Cursor.visible = false;
+    }
 }

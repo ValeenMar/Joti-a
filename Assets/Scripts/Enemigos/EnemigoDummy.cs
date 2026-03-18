@@ -13,6 +13,18 @@ using UnityEngine.AI;
 [RequireComponent(typeof(VidaEnemigo))]
 public class EnemigoDummy : MonoBehaviour
 {
+    // Este valor guarda el rango de vision recomendado para esta IA.
+    private const float RangoVisionRecomendado = 15f;
+
+    // Este valor guarda el angulo de vision recomendado para esta IA.
+    private const float AnguloVisionRecomendado = 120f;
+
+    // Este valor guarda el intervalo recomendado de chequeo de vision.
+    private const float IntervaloVisionRecomendado = 0.1f;
+
+    // Este valor define cada cuanto se reintenta anclar el agente al NavMesh si se desengancha.
+    private const float IntervaloReintentoNavMesh = 0.5f;
+
     // Esta variable define en que estado arranca el enemigo.
     [Header("Estado Actual")]
     [SerializeField] private EstadosEnemigo estadoActual = EstadosEnemigo.Patrullar;
@@ -114,6 +126,18 @@ public class EnemigoDummy : MonoBehaviour
     // Esta variable guarda el proximo instante en el que se recalculara la vision.
     private float tiempoProximoChequeoVision;
 
+    // Esta variable guarda el estado inicial elegido en Inspector para restaurarlo tras respawn.
+    private EstadosEnemigo estadoInicialConfigurado;
+
+    // Esta variable marca si la IA termino su inicializacion diferida.
+    private bool iaInicializada;
+
+    // Esta referencia guarda la corrutina de inicializacion diferida.
+    private Coroutine rutinaInicializacionIA;
+
+    // Esta variable guarda cuando volver a intentar engancharse al NavMesh.
+    private float tiempoProximoReintentoNavMesh;
+
     // Esta funcion se ejecuta al iniciar el objeto.
     private void Awake()
     {
@@ -122,6 +146,12 @@ public class EnemigoDummy : MonoBehaviour
 
         // Obtenemos referencia al sistema de vida del mismo objeto.
         vidaEnemigo = GetComponent<VidaEnemigo>();
+
+        // Guardamos el estado inicial para poder restaurarlo en reinicios.
+        estadoInicialConfigurado = estadoActual;
+
+        // Validamos parametros de vision para que arranquen en valores robustos.
+        ValidarParametrosVision();
     }
 
     // Esta funcion se ejecuta cuando el objeto se habilita.
@@ -129,6 +159,9 @@ public class EnemigoDummy : MonoBehaviour
     {
         // Escuchamos el evento de muerte para iniciar la secuencia final.
         vidaEnemigo.AlMorir += ManejarMuerteEnemigo;
+
+        // Reintentamos inicializacion diferida para soportar respawn o reload.
+        IniciarInicializacionDiferida();
     }
 
     // Esta funcion se ejecuta cuando el objeto se deshabilita.
@@ -136,39 +169,56 @@ public class EnemigoDummy : MonoBehaviour
     {
         // Dejamos de escuchar el evento para evitar referencias colgadas.
         vidaEnemigo.AlMorir -= ManejarMuerteEnemigo;
+
+        // Si hay una inicializacion en curso, la detenemos para no dejar corrutinas colgadas.
+        if (rutinaInicializacionIA != null)
+        {
+            StopCoroutine(rutinaInicializacionIA);
+            rutinaInicializacionIA = null;
+        }
+
+        // Marcamos la IA como no inicializada para el proximo enable.
+        iaInicializada = false;
     }
 
     // Esta funcion se ejecuta una sola vez al empezar la escena.
     private void Start()
     {
-        // Inicializamos la velocidad de patrulla.
-        agenteNavMesh.speed = velocidadPatrulla;
-
-        // Buscamos un jugador inicial para tener objetivo temprano.
-        BuscarObjetivoJugador();
-
-        // Preparamos la lista de puntos de patrulla si hace falta.
-        PrepararPuntosPatrulla();
-
-        // Elegimos el punto mas cercano para empezar la patrulla de forma natural.
-        SeleccionarPuntoPatrullaMasCercano();
-
-        // Si hay puntos de patrulla configurados, arrancamos yendo al primero.
-        if (puntosPatrulla != null && puntosPatrulla.Length > 0)
-        {
-            // Indicamos el primer destino de patrulla.
-            IntentarDefinirDestino(puntosPatrulla[indicePuntoPatrulla].position);
-        }
+        // Pedimos inicializacion diferida para soportar carga post-restart.
+        IniciarInicializacionDiferida();
     }
 
     // Esta funcion se ejecuta cada frame para actualizar IA.
     private void Update()
     {
+        // Si aun no termino la inicializacion diferida, no ejecutamos logica de IA.
+        if (!iaInicializada)
+        {
+            return;
+        }
+
         // Si el enemigo ya murio, detenemos toda logica de IA.
         if (!vidaEnemigo.EstaVivo)
         {
             // Salimos para no ejecutar comportamiento post mortem.
             return;
+        }
+
+        // Si el agente se desengancho del NavMesh tras un reload, intentamos recuperarlo.
+        if (agenteNavMesh != null && agenteNavMesh.enabled && !agenteNavMesh.isOnNavMesh)
+        {
+            // Solo reintentamos en una frecuencia fija para no gastar de mas.
+            if (Time.time >= tiempoProximoReintentoNavMesh)
+            {
+                tiempoProximoReintentoNavMesh = Time.time + IntervaloReintentoNavMesh;
+                AsegurarAgenteSobreNavMesh(6f);
+            }
+
+            // Si sigue fuera del NavMesh, esperamos al siguiente frame.
+            if (!agenteNavMesh.isOnNavMesh)
+            {
+                return;
+            }
         }
 
         // Si no tenemos jugador valido, intentamos encontrar uno.
@@ -191,19 +241,82 @@ public class EnemigoDummy : MonoBehaviour
     // Este metodo intenta localizar un jugador con VidaJugador en la escena.
     private void BuscarObjetivoJugador()
     {
-        // Buscamos cualquier componente VidaJugador activo en escena.
-        VidaJugador candidato = FindObjectOfType<VidaJugador>();
+        // Limpiamos referencias previas para evitar usar objetivos invalidados.
+        objetivoJugador = null;
+        vidaJugadorObjetivo = null;
 
-        // Si encontramos uno, lo guardamos como objetivo.
-        if (candidato != null)
+        // Esta referencia intenta ubicar un objeto con tag Player.
+        GameObject jugadorConTag = null;
+
+        // En algunas escenas el tag puede no existir todavia, por eso usamos try/catch.
+        try
         {
-            // Guardamos referencia al componente de vida del jugador.
-            vidaJugadorObjetivo = candidato;
+            jugadorConTag = GameObject.FindWithTag("Player");
+        }
+        catch (UnityException)
+        {
+            jugadorConTag = null;
+        }
 
-            // Guardamos referencia al transform del jugador.
-            objetivoJugador = candidato.transform;
+        // Si encontramos objeto por tag, intentamos obtener VidaJugador desde ahi.
+        if (jugadorConTag != null)
+        {
+            // Buscamos VidaJugador en el mismo objeto o en hijos.
+            VidaJugador vidaPorTag = jugadorConTag.GetComponent<VidaJugador>();
 
-            // Guardamos la ultima posicion conocida para poder perseguir por memoria si se esconde.
+            // Si no esta en raiz, probamos en hijos por seguridad.
+            if (vidaPorTag == null)
+            {
+                vidaPorTag = jugadorConTag.GetComponentInChildren<VidaJugador>();
+            }
+
+            // Si encontramos uno vivo, lo tomamos como objetivo inmediato.
+            if (vidaPorTag != null && vidaPorTag.EstaVivo)
+            {
+                vidaJugadorObjetivo = vidaPorTag;
+                objetivoJugador = vidaPorTag.transform;
+                ultimaPosicionVistaJugador = objetivoJugador.position;
+                return;
+            }
+        }
+
+        // Si no hubo target por tag, buscamos cualquier VidaJugador viva en escena.
+        VidaJugador[] candidatos = FindObjectsOfType<VidaJugador>();
+
+        // Guardamos la mejor opcion encontrada segun cercania.
+        VidaJugador mejorCandidato = null;
+
+        // Guardamos distancia minima en formato cuadrado para optimizar.
+        float mejorDistanciaCuadrada = float.MaxValue;
+
+        // Recorremos candidatos para elegir el vivo mas cercano.
+        for (int indiceCandidato = 0; indiceCandidato < candidatos.Length; indiceCandidato++)
+        {
+            // Guardamos referencia local del candidato.
+            VidaJugador candidatoActual = candidatos[indiceCandidato];
+
+            // Ignoramos referencias nulas o jugadores muertos.
+            if (candidatoActual == null || !candidatoActual.EstaVivo)
+            {
+                continue;
+            }
+
+            // Calculamos distancia al cuadrado desde este enemigo al candidato.
+            float distanciaCuadradaActual = (candidatoActual.transform.position - transform.position).sqrMagnitude;
+
+            // Si es mejor que la guardada, actualizamos candidato preferido.
+            if (distanciaCuadradaActual < mejorDistanciaCuadrada)
+            {
+                mejorDistanciaCuadrada = distanciaCuadradaActual;
+                mejorCandidato = candidatoActual;
+            }
+        }
+
+        // Si encontramos candidato valido, lo guardamos como objetivo.
+        if (mejorCandidato != null)
+        {
+            vidaJugadorObjetivo = mejorCandidato;
+            objetivoJugador = mejorCandidato.transform;
             ultimaPosicionVistaJugador = objetivoJugador.position;
         }
     }
@@ -492,8 +605,21 @@ public class EnemigoDummy : MonoBehaviour
             return;
         }
 
-        // Enviamos el golpe simple directamente al sistema de vida del jugador.
-        vidaJugadorObjetivo.RecibirDanio(danioAtaque);
+        // Armamos datos completos de dano para mantener compatibilidad con feedback global.
+        DatosDanio datosDanio = new DatosDanio
+        {
+            atacante = gameObject,
+            objetivo = vidaJugadorObjetivo.gameObject,
+            danioBase = danioAtaque,
+            multiplicadorZona = 1f,
+            tipoZona = TipoZonaDanio.Cuerpo,
+            puntoImpacto = vidaJugadorObjetivo.transform.position + Vector3.up,
+            direccionImpacto = (vidaJugadorObjetivo.transform.position - transform.position).normalized,
+            esGolpeFuerte = false
+        };
+
+        // Enviamos el golpe al sistema de vida del jugador.
+        vidaJugadorObjetivo.RecibirDanio(datosDanio);
     }
 
     // Este metodo responde al evento de muerte de VidaEnemigo.
@@ -805,6 +931,192 @@ public class EnemigoDummy : MonoBehaviour
 
         // Asignamos el destino de navegacion.
         agenteNavMesh.SetDestination(destino);
+    }
+
+    // Este metodo inicia la corrutina de inicializacion diferida de IA.
+    private void IniciarInicializacionDiferida()
+    {
+        // Si este objeto no esta activo, no iniciamos corrutina.
+        if (!isActiveAndEnabled)
+        {
+            return;
+        }
+
+        // Si ya habia una corrutina previa, la reiniciamos para tomar estado fresco.
+        if (rutinaInicializacionIA != null)
+        {
+            StopCoroutine(rutinaInicializacionIA);
+        }
+
+        // Lanzamos la inicializacion post-frame para evitar race conditions tras spawn/reload.
+        rutinaInicializacionIA = StartCoroutine(RutinaInicializacionDiferida());
+    }
+
+    // Esta corrutina inicializa IA y NavMeshAgent luego de que termine el frame de spawn.
+    private IEnumerator RutinaInicializacionDiferida()
+    {
+        // Marcamos temporalmente como no inicializada mientras preparamos estado.
+        iaInicializada = false;
+
+        // Esperamos al final del frame para dar tiempo a que Unity registre NavMesh y colliders.
+        yield return new WaitForEndOfFrame();
+
+        // Si el objeto se desactivo durante la espera, abortamos.
+        if (!isActiveAndEnabled)
+        {
+            rutinaInicializacionIA = null;
+            yield break;
+        }
+
+        // Restauramos valores temporales de IA para un arranque limpio.
+        ReiniciarEstadoTemporalIA();
+
+        // Validamos parametros de vision por seguridad post-restart.
+        ValidarParametrosVision();
+
+        // Intentamos enganchar el agente sobre NavMesh en varios frames.
+        for (int intentoNavMesh = 0; intentoNavMesh < 6; intentoNavMesh++)
+        {
+            // Si ya esta correctamente en NavMesh, no hace falta seguir intentando.
+            if (AsegurarAgenteSobreNavMesh(6f))
+            {
+                break;
+            }
+
+            // Esperamos al siguiente frame para reintentar.
+            yield return new WaitForEndOfFrame();
+        }
+
+        // Si el agente se perdio durante la espera, abortamos la inicializacion.
+        if (agenteNavMesh == null)
+        {
+            rutinaInicializacionIA = null;
+            yield break;
+        }
+
+        // Aplicamos velocidad inicial de patrulla.
+        agenteNavMesh.speed = velocidadPatrulla;
+
+        // Habilitamos movimiento del agente.
+        agenteNavMesh.isStopped = false;
+
+        // Buscamos un jugador inicial para tener objetivo temprano.
+        BuscarObjetivoJugador();
+
+        // Preparamos la lista de puntos de patrulla si hace falta.
+        PrepararPuntosPatrulla();
+
+        // Elegimos el punto mas cercano para empezar la patrulla de forma natural.
+        SeleccionarPuntoPatrullaMasCercano();
+
+        // Si hay puntos de patrulla configurados, arrancamos yendo al primero.
+        if (puntosPatrulla != null && puntosPatrulla.Length > 0)
+        {
+            // Indicamos el primer destino de patrulla.
+            IntentarDefinirDestino(puntosPatrulla[indicePuntoPatrulla].position);
+        }
+
+        // Marcamos la IA como lista para ejecutar logica normal.
+        iaInicializada = true;
+
+        // Limpiamos referencia de corrutina activa.
+        rutinaInicializacionIA = null;
+    }
+
+    // Este metodo intenta asegurar que el agente este anclado a una zona NavMesh valida.
+    private bool AsegurarAgenteSobreNavMesh(float radioBusqueda)
+    {
+        // Si el agente no existe o esta deshabilitado, no podemos usar navmesh.
+        if (agenteNavMesh == null || !agenteNavMesh.enabled)
+        {
+            return false;
+        }
+
+        // Si ya esta sobre NavMesh, devolvemos exito.
+        if (agenteNavMesh.isOnNavMesh)
+        {
+            return true;
+        }
+
+        // Intentamos encontrar un punto cercano valido en NavMesh.
+        NavMeshHit hitNavMesh;
+        bool encontroPunto = NavMesh.SamplePosition(transform.position, out hitNavMesh, Mathf.Max(1f, radioBusqueda), NavMesh.AllAreas);
+
+        // Si no encontramos punto, devolvemos falso para reintentar despues.
+        if (!encontroPunto)
+        {
+            return false;
+        }
+
+        // Intentamos mover el agente exactamente al punto valido.
+        bool warpExitoso = agenteNavMesh.Warp(hitNavMesh.position);
+
+        // Si Warp fallo, ajustamos transform manualmente como fallback.
+        if (!warpExitoso)
+        {
+            transform.position = hitNavMesh.position;
+        }
+
+        // Devolvemos si finalmente quedo sobre NavMesh.
+        return agenteNavMesh.isOnNavMesh;
+    }
+
+    // Este metodo reinicia estado temporal para evitar basura de sesiones previas.
+    private void ReiniciarEstadoTemporalIA()
+    {
+        // Restauramos el estado inicial configurado en Inspector.
+        estadoActual = estadoInicialConfigurado;
+
+        // Reiniciamos indice de patrulla y timers basicos.
+        indicePuntoPatrulla = 0;
+        temporizadorEsperaPatrulla = 0f;
+        tiempoProximoAtaque = 0f;
+        tiempoUltimaVisionJugador = -999f;
+        tiempoProximoChequeoVision = 0f;
+        jugadorVisibleEnEsteFrame = false;
+        ataqueEnCurso = false;
+        tiempoProximoReintentoNavMesh = Time.time;
+    }
+
+    // Este metodo ajusta parametros de vision para mantener valores robustos.
+    private void ValidarParametrosVision()
+    {
+        // Si el intervalo viene invalido, volvemos al recomendado de 0.1 segundos.
+        if (intervaloChequeoVision <= 0f)
+        {
+            intervaloChequeoVision = IntervaloVisionRecomendado;
+        }
+
+        // Si el rango viene invalido, volvemos al recomendado de 15.
+        if (rangoVision <= 0f)
+        {
+            rangoVision = RangoVisionRecomendado;
+        }
+
+        // Si el angulo viene invalido, volvemos al recomendado de 120.
+        if (anguloVision <= 0f)
+        {
+            anguloVision = AnguloVisionRecomendado;
+        }
+
+        // Aplicamos limites para evitar valores extremos que rompan el comportamiento.
+        intervaloChequeoVision = Mathf.Clamp(intervaloChequeoVision, 0.05f, 1f);
+        rangoVision = Mathf.Clamp(rangoVision, 1f, 100f);
+        anguloVision = Mathf.Clamp(anguloVision, 10f, 179f);
+    }
+
+    // Este metodo se ejecuta en editor cuando cambia un valor serializado.
+    private void OnValidate()
+    {
+        // Mantenemos la configuracion de vision en rangos seguros tambien desde Inspector.
+        ValidarParametrosVision();
+    }
+
+    // Este metodo publico permite a spawners pedir reinicio robusto de IA tras instanciar.
+    public void ReiniciarIATrasSpawn()
+    {
+        // Relanzamos la inicializacion diferida para asegurar navmesh y objetivo.
+        IniciarInicializacionDiferida();
     }
 
     // COPILOT-EXPAND: Aqui podes agregar ataques especiales, llamadas de ayuda, evasiones y comportamientos de grupo.

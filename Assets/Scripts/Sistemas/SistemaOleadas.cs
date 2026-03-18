@@ -11,6 +11,9 @@ using UnityEngine;
 // Esta clase administra el ciclo completo de oleadas de enemigos.
 public class SistemaOleadas : MonoBehaviour
 {
+    // Este valor define un pequeno delay tras spawn para inicializar IA de forma robusta.
+    private const float DelayInicializacionIATrasSpawn = 0f;
+
     // Esta referencia apunta al GameManager de la partida.
     [SerializeField] private GameManager gameManager;
 
@@ -78,6 +81,9 @@ public class SistemaOleadas : MonoBehaviour
     // Esta funcion se ejecuta al activar el componente.
     private void OnEnable()
     {
+        // Limpiamos estado runtime para soportar restart con recarga parcial de escena.
+        ReiniciarEstadoRuntime();
+
         // Escuchamos el evento global de enemigo eliminado para descontar enemigos vivos.
         EventosJuego.AlEnemigoEliminado += ManejarEnemigoEliminado;
     }
@@ -245,6 +251,9 @@ public class SistemaOleadas : MonoBehaviour
             // Registramos este enemigo dentro de la oleada activa.
             enemigosActivos.Add(enemigoCreado);
 
+            // Inicializamos la IA del enemigo despues del spawn para evitar fallos de NavMesh post-restart.
+            StartCoroutine(InicializarEnemigoPostSpawn(enemigoCreado));
+
             // Si hay mas enemigos que puntos, separamos cada spawn para evitar apilarlos.
             if (necesitaSeparacionTemporal && indiceEnemigo < cantidadEnemigosEstaOleada - 1)
             {
@@ -254,6 +263,40 @@ public class SistemaOleadas : MonoBehaviour
 
         // Marcamos que ya termino de generarse toda la oleada.
         spawnEnProgresoOleada = false;
+    }
+
+    // Esta corrutina inicializa la IA del enemigo al final del frame de instanciacion.
+    private IEnumerator InicializarEnemigoPostSpawn(GameObject enemigoCreado)
+    {
+        // Si por algun motivo no existe enemigo, salimos.
+        if (enemigoCreado == null)
+        {
+            yield break;
+        }
+
+        // Esperamos al menos al final del frame para que NavMeshAgent quede listo tras spawn/reload.
+        yield return new WaitForEndOfFrame();
+
+        // Si se configuro un delay extra, lo aplicamos.
+        if (DelayInicializacionIATrasSpawn > 0f)
+        {
+            yield return new WaitForSeconds(DelayInicializacionIATrasSpawn);
+        }
+
+        // Si el enemigo ya no existe despues de esperar, abortamos.
+        if (enemigoCreado == null)
+        {
+            yield break;
+        }
+
+        // Buscamos el script de IA principal en el enemigo recien creado.
+        EnemigoDummy enemigoDummy = enemigoCreado.GetComponent<EnemigoDummy>();
+
+        // Si existe IA, pedimos reinicio diferido post-spawn.
+        if (enemigoDummy != null)
+        {
+            enemigoDummy.ReiniciarIATrasSpawn();
+        }
     }
 
     // Este metodo responde cuando muere un enemigo.
@@ -338,6 +381,20 @@ public class SistemaOleadas : MonoBehaviour
         {
             enemigosActivos.Remove(enemigosAEliminar[indiceNulo]);
         }
+    }
+
+    // Este metodo deja el sistema limpio para reinicios de escena o reactivaciones.
+    private void ReiniciarEstadoRuntime()
+    {
+        // Reiniciamos banderas internas de oleada.
+        oleadaActiva = false;
+        spawnEnProgresoOleada = false;
+
+        // Reiniciamos contador rotativo de spawn.
+        indiceSpawnRotativo = 0;
+
+        // Limpiamos enemigos activos por si quedaban referencias de una corrida previa.
+        enemigosActivos.Clear();
     }
 
     // Este metodo prepara el estilo del HUD de oleadas.

@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 // Esta clase controla una camara de tercera persona con seguimiento suave y prevencion de colisiones.
 [DisallowMultipleComponent]
@@ -25,11 +26,29 @@ public class CamaraTercerPersona : MonoBehaviour
     // Esta velocidad suaviza el cambio entre hombros para que no sea un salto brusco.
     [SerializeField] private float velocidadCambioHombro = 6f;
 
+    // Esta altura adicional sube la camara por encima del anclaje del jugador.
+    [SerializeField] private float alturaCamaraAdicional = 0.45f;
+
+    // Esta altura adicional sube el punto de foco para mirar un poco por encima del torso.
+    [SerializeField] private float alturaFocoAdicional = 0.18f;
+
     // Esta capa define contra que objetos se evaluara la colision de camara.
     [SerializeField] private LayerMask mascaraColision = ~0;
 
     // Esta distancia es la separacion deseada entre camara y objetivo cuando no hay obstaculos.
     [SerializeField] private float distanciaDeseada = 4.5f;
+
+    // Esta distancia extra fija empuja un poco mas la camara hacia atras para darle mas aire al jugador.
+    [SerializeField] private float distanciaExtraBase = 1.25f;
+
+    // Esta distancia extra se suma cuando hay enemigos cerca y la camara abre el encuadre.
+    [SerializeField] private float distanciaExtraPorAmenaza = 1.25f;
+
+    // Esta distancia define a partir de que cercania de enemigos empieza a abrirse el zoom dinamico.
+    [SerializeField] private float rangoAmenazaZoom = 6f;
+
+    // Esta velocidad suaviza el cambio del zoom dinamico para que no se note brusco.
+    [SerializeField] private float suavizadoZoom = 8f;
 
     // Esta distancia minima evita que la camara se pegue demasiado al jugador.
     [SerializeField] private float distanciaMinima = 1.1f;
@@ -61,6 +80,9 @@ public class CamaraTercerPersona : MonoBehaviour
     // Este limite evita que la camara mire demasiado hacia arriba.
     [SerializeField] private float limiteMaximoVertical = 65f;
 
+    // Este valor asegura que la camara mantenga siempre un leve angulo hacia abajo.
+    [SerializeField] private float anguloVerticalMinimoPersistente = 12f;
+
     // Esta variable guarda el yaw acumulado para rotacion horizontal.
     private float anguloHorizontal;
 
@@ -90,6 +112,9 @@ public class CamaraTercerPersona : MonoBehaviour
 
     // Esta variable guarda el valor suavizado actual del hombro.
     private float direccionHombroSuavizada;
+
+    // Esta variable guarda la distancia suavizada que usa la camara en tiempo real.
+    private float distanciaDeseadaSuavizada;
 
     // Esta funcion se ejecuta al iniciar para preparar referencias.
     private void Awake()
@@ -128,6 +153,9 @@ public class CamaraTercerPersona : MonoBehaviour
         // Guardamos posicion actual como base de suavizado inicial.
         posicionSuavizada = transform.position;
 
+        // Guardamos la distancia actual como punto de partida del zoom dinamico.
+        distanciaDeseadaSuavizada = distanciaDeseada + distanciaExtraBase;
+
         // Elegimos el hombro inicial segun la configuracion del Inspector.
         direccionHombroObjetivo = empezarEnHombroDerecho ? 1f : -1f;
 
@@ -136,6 +164,23 @@ public class CamaraTercerPersona : MonoBehaviour
 
         // Actualizamos referencias del objetivo seguido para saber si estamos siguiendo un Rigidbody del jugador.
         ActualizarReferenciasObjetivo();
+
+        // Intentamos aplicar la pose instantanea desde el arranque para evitar cualquier barrido inicial.
+        ForzarReposicionInstantanea();
+    }
+
+    // Esta funcion se ejecuta al habilitar el componente y se usa para detectar recargas de escena.
+    private void OnEnable()
+    {
+        // Escuchamos la carga de escena para reposicionar instantaneamente la camara tras un reinicio.
+        SceneManager.sceneLoaded += AlCargarEscena;
+    }
+
+    // Esta funcion se ejecuta al deshabilitar el componente y limpia la suscripcion de escena.
+    private void OnDisable()
+    {
+        // Dejamos de escuchar la carga de escena para evitar referencias colgadas.
+        SceneManager.sceneLoaded -= AlCargarEscena;
     }
 
     // Esta funcion corre despues del movimiento del jugador y actualiza la camara.
@@ -159,6 +204,9 @@ public class CamaraTercerPersona : MonoBehaviour
             ActualizarReferenciasObjetivo();
         }
 
+        // Mantenemos un angulo minimo de inclinacion para que la camara no quede nunca demasiado plana.
+        anguloVertical = Mathf.Clamp(anguloVertical, Mathf.Max(limiteMinimoVertical, anguloVerticalMinimoPersistente), limiteMaximoVertical);
+
         // NOTA MIRROR: este bloque de input debe correr solo en el cliente local que controla la camara.
         // En el futuro con Mirror, normalmente esto iria ligado al LocalPlayer (hasAuthority/isLocalPlayer).
         float entradaMouseX = Input.GetAxis("Mouse X");
@@ -178,10 +226,16 @@ public class CamaraTercerPersona : MonoBehaviour
         anguloVertical -= entradaMouseY * sensibilidadMouseY * Time.deltaTime;
 
         // Limitamos rotacion vertical para no atravesar angulos incomodos.
-        anguloVertical = Mathf.Clamp(anguloVertical, limiteMinimoVertical, limiteMaximoVertical);
+        anguloVertical = Mathf.Clamp(anguloVertical, Mathf.Max(limiteMinimoVertical, anguloVerticalMinimoPersistente), limiteMaximoVertical);
 
         // Construimos la rotacion deseada en base a los angulos calculados.
         Quaternion rotacionDeseada = Quaternion.Euler(anguloVertical, anguloHorizontal, 0f);
+
+        // Calculamos el zoom dinamico segun la distancia del enemigo mas cercano.
+        float distanciaObjetivoDinamica = CalcularDistanciaDeseadaDinamica();
+
+        // Suavizamos el cambio del zoom para que no salte de golpe.
+        distanciaDeseadaSuavizada = Mathf.Lerp(distanciaDeseadaSuavizada, distanciaObjetivoDinamica, Time.deltaTime * suavizadoZoom);
 
         // Suavizamos el cambio de hombro para que el pasaje de un lado al otro sea agradable.
         direccionHombroSuavizada = Mathf.MoveTowards(direccionHombroSuavizada, direccionHombroObjetivo, velocidadCambioHombro * Time.deltaTime);
@@ -193,10 +247,10 @@ public class CamaraTercerPersona : MonoBehaviour
         Vector3 puntoFocoBase = ObtenerPuntoSeguimientoBase();
 
         // Desplazamos un poco el foco hacia el mismo hombro para que el personaje no quede pegado al centro.
-        Vector3 puntoFoco = puntoFocoBase + rotacionDeseada * Vector3.right * desplazamientoLateralFoco * direccionHombroSuavizada;
+        Vector3 puntoFoco = puntoFocoBase + Vector3.up * alturaFocoAdicional + rotacionDeseada * Vector3.right * desplazamientoLateralFoco * direccionHombroSuavizada;
 
         // Calculamos la posicion ideal sin obstaculos, sumando el offset lateral de hombro.
-        Vector3 posicionIdeal = puntoFocoBase - rotacionDeseada * Vector3.forward * distanciaDeseada + offsetLateral;
+        Vector3 posicionIdeal = puntoFocoBase + Vector3.up * alturaCamaraAdicional - rotacionDeseada * Vector3.forward * distanciaDeseadaSuavizada + offsetLateral;
 
         // Ajustamos la posicion ideal en caso de colision con piso o paredes.
         Vector3 posicionAjustada = AjustarPosicionPorColision(puntoFoco, posicionIdeal);
@@ -246,6 +300,53 @@ public class CamaraTercerPersona : MonoBehaviour
 
         // Suavizamos la rotacion para evitar micro-jitter.
         transform.rotation = Quaternion.Slerp(transform.rotation, rotacionMirandoAlFoco, suavizadoRotacion * Time.deltaTime);
+    }
+
+    // Esta funcion calcula la distancia dinamica segun la amenaza mas cercana.
+    private float CalcularDistanciaDeseadaDinamica()
+    {
+        // Empezamos con la distancia base que ya tenia la camara mas un empuje extra fijo.
+        float distanciaObjetivo = distanciaDeseada + distanciaExtraBase;
+
+        // Si no hay enemigos activos, devolvemos la distancia base ampliada.
+        VidaEnemigo[] enemigos = FindObjectsOfType<VidaEnemigo>();
+
+        // Guardamos la distancia mas cercana encontrada.
+        float distanciaMasCercana = float.MaxValue;
+
+        // Recorremos la lista de enemigos para saber cual esta mas cerca de la camara/jugador.
+        for (int indiceEnemigo = 0; indiceEnemigo < enemigos.Length; indiceEnemigo++)
+        {
+            // Si el enemigo no existe o ya murio, lo ignoramos.
+            if (enemigos[indiceEnemigo] == null || !enemigos[indiceEnemigo].EstaVivo)
+            {
+                continue;
+            }
+
+            // Calculamos la distancia al enemigo mas cercano.
+            float distanciaActual = Vector3.Distance(transform.position, enemigos[indiceEnemigo].transform.position);
+
+            // Si esta distancia es la menor encontrada, la guardamos.
+            if (distanciaActual < distanciaMasCercana)
+            {
+                distanciaMasCercana = distanciaActual;
+            }
+        }
+
+        // Si no encontramos enemigos vivos, devolvemos la distancia base ampliada.
+        if (distanciaMasCercana == float.MaxValue)
+        {
+            return distanciaObjetivo;
+        }
+
+        // Calculamos una amenaza de 0 a 1 segun la cercania del enemigo.
+        float amenazaCercana = 1f - Mathf.Clamp01(distanciaMasCercana / Mathf.Max(0.01f, rangoAmenazaZoom));
+
+        // Sumamos la apertura extra segun la amenaza.
+        distanciaObjetivo += distanciaExtraPorAmenaza * amenazaCercana;
+
+        // Devolvemos la distancia final dinamica.
+        return distanciaObjetivo;
     }
 
     // Este metodo calcula una posicion segura usando SphereCast para no atravesar objetos.
@@ -333,12 +434,36 @@ public class CamaraTercerPersona : MonoBehaviour
         {
             objetivoSeguimiento = anclaje.ObtenerObjetivoCamara();
             ActualizarReferenciasObjetivo();
+            ForzarReposicionInstantanea();
             return;
         }
 
         // Si no tiene anclaje, seguimos directamente el transform del jugador.
         objetivoSeguimiento = posibleJugador.transform;
         ActualizarReferenciasObjetivo();
+        ForzarReposicionInstantanea();
+    }
+
+    // Esta funcion se ejecuta cuando una escena termina de cargarse.
+    private void AlCargarEscena(Scene escena, LoadSceneMode modo)
+    {
+        // Si no estamos en Play, no hacemos nada.
+        if (!Application.isPlaying)
+        {
+            return;
+        }
+
+        // Reiniciamos el estado interno para evitar que la camara arrastre la pose anterior.
+        ReiniciarEstadoInstantaneo();
+
+        // Intentamos reasignar objetivo y aplicar la pose inmediata lo antes posible.
+        if (objetivoSeguimiento == null)
+        {
+            IntentarAsignarObjetivoAutomatico();
+        }
+
+        // Si ya tenemos objetivo, forzamos la pose inicial sin esperar al primer sweep.
+        ForzarReposicionInstantanea();
     }
 
     // Este metodo permite asignar el objetivo manualmente desde otros scripts.
@@ -349,6 +474,9 @@ public class CamaraTercerPersona : MonoBehaviour
 
         // Actualizamos referencias internas para que el seguimiento no quede apuntando a datos viejos.
         ActualizarReferenciasObjetivo();
+
+        // Reposicionamos instantaneamente para evitar barridos al cambiar de objetivo.
+        ForzarReposicionInstantanea();
     }
 
     // Este metodo publico permite cambiar de hombro desde otros scripts si algun dia lo necesitamos.
@@ -394,6 +522,84 @@ public class CamaraTercerPersona : MonoBehaviour
 
         // Intentamos obtener el script de movimiento del jugador seguido.
         movimientoJugadorObjetivo = raizObjetivoSeguimiento.GetComponent<MovimientoJugador>();
+    }
+
+    // Esta funcion resetea el estado visual de la camara para un inicio limpio.
+    private void ReiniciarEstadoInstantaneo()
+    {
+        // Marcamos que todavia no aplicamos la pose inicial.
+        posicionInicialAplicada = false;
+
+        // Limpiamos la velocidad interna del suavizado para que no arrastre inercia vieja.
+        velocidadSuavizado = Vector3.zero;
+
+        // Reiniciamos la posicion suavizada a la posicion actual del rig.
+        posicionSuavizada = transform.position;
+
+        // Recentramos el hombro para evitar cambios bruscos al volver a cargar.
+        direccionHombroSuavizada = direccionHombroObjetivo;
+    }
+
+    // Esta funcion intenta poner la camara exactamente en la posicion correcta en el mismo frame.
+    private void ForzarReposicionInstantanea()
+    {
+        // Si no hay objetivo valido, no podemos reposicionar todavia.
+        if (objetivoSeguimiento == null)
+        {
+            return;
+        }
+
+        // Si el objetivo cambio o sus referencias aun no estaban preparadas, las resolvemos ahora.
+        if (raizObjetivoSeguimiento == null || objetivoSeguimiento.root != raizObjetivoSeguimiento)
+        {
+            ActualizarReferenciasObjetivo();
+        }
+
+        // Si aun no hay objetivo raiz, salimos por seguridad.
+        if (raizObjetivoSeguimiento == null)
+        {
+            return;
+        }
+
+        // Tomamos los angulos actuales como base para el reposicionamiento inmediato.
+        Vector3 angulosActuales = transform.eulerAngles;
+        anguloHorizontal = angulosActuales.y;
+        anguloVertical = Mathf.Clamp(Mathf.Max(angulosActuales.x, anguloVerticalMinimoPersistente), Mathf.Max(limiteMinimoVertical, anguloVerticalMinimoPersistente), limiteMaximoVertical);
+
+        // Calculamos la rotacion deseada con los angulos actuales.
+        Quaternion rotacionDeseada = Quaternion.Euler(anguloVertical, anguloHorizontal, 0f);
+
+        // Calculamos la distancia dinamica de este frame.
+        distanciaDeseadaSuavizada = CalcularDistanciaDeseadaDinamica();
+
+        // Recentramos el hombro suavizado para que no arrastre una curva vieja.
+        direccionHombroSuavizada = direccionHombroObjetivo;
+
+        // Calculamos el offset lateral usando el eje derecho de la rotacion actual.
+        Vector3 offsetLateral = rotacionDeseada * Vector3.right * desplazamientoLateralCamara * direccionHombroSuavizada;
+
+        // Obtenemos la base de seguimiento estable del jugador.
+        Vector3 puntoFocoBase = ObtenerPuntoSeguimientoBase();
+
+        // Calculamos el punto que la camara va a mirar.
+        Vector3 puntoFoco = puntoFocoBase + Vector3.up * alturaFocoAdicional + rotacionDeseada * Vector3.right * desplazamientoLateralFoco * direccionHombroSuavizada;
+
+        // Calculamos la posicion ideal ya con altura y distancia nuevas.
+        Vector3 posicionIdeal = puntoFocoBase + Vector3.up * alturaCamaraAdicional - rotacionDeseada * Vector3.forward * distanciaDeseadaSuavizada + offsetLateral;
+
+        // Ajustamos la posicion por colision para no atravesar paredes ni piso.
+        Vector3 posicionAjustada = AjustarPosicionPorColision(puntoFoco, posicionIdeal);
+
+        // Aplicamos la posicion directamente para evitar cualquier barrido visual.
+        transform.position = posicionAjustada;
+
+        // Aplicamos la rotacion directa mirando al foco.
+        transform.rotation = Quaternion.LookRotation((puntoFoco - transform.position).normalized, Vector3.up);
+
+        // Sincronizamos los valores internos para que el siguiente frame arranque limpio.
+        posicionSuavizada = posicionAjustada;
+        velocidadSuavizado = Vector3.zero;
+        posicionInicialAplicada = true;
     }
 
     // Este metodo devuelve un punto de seguimiento estable para render.

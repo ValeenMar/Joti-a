@@ -48,6 +48,12 @@ public class SistemaPociones : MonoBehaviour
     // Esta referencia guarda el rectangulo del boton dibujado por OnGUI.
     private Rect rectBotonUsarPocion;
 
+    // Este valor define cada cuanto reintentamos recuperar VidaJugador si se pierde tras reload.
+    [SerializeField] private float intervaloRebindVida = 0.5f;
+
+    // Esta variable guarda el momento minimo para volver a intentar el rebind.
+    private float tiempoProximoRebindVida;
+
     // Esta propiedad expone cuantas pociones quedan.
     public int CantidadActualPociones => cantidadActualPociones;
 
@@ -70,9 +76,28 @@ public class SistemaPociones : MonoBehaviour
         rectBotonUsarPocion = new Rect(posicionHud.x, posicionHud.y + 26f, 150f, 28f);
     }
 
+    // Esta funcion corre despues de Awake y ayuda a recuperar referencias tras reinicio de escena.
+    private void Start()
+    {
+        // Reintentamos vincular VidaJugador por si se perdio despues de un reload.
+        RebindVidaJugadorSiHaceFalta(true);
+    }
+
     // Esta funcion corre cada frame para leer la tecla de uso.
     private void Update()
     {
+        // Reintentamos vincular VidaJugador de forma dinamica por robustez post-restart.
+        RebindVidaJugadorSiHaceFalta(false);
+
+        // Si se apreto H (o la tecla configurada), registramos el input aunque no se pueda consumir.
+        bool inputPocionDetectado = Input.GetKeyDown(KeyCode.H) || Input.GetKeyDown(teclaUsarPocion);
+
+        // Si hubo input, dejamos una traza para depuracion.
+        if (inputPocionDetectado)
+        {
+            Debug.Log("Poción usada");
+        }
+
         // Si no tenemos vida jugador, no podemos usar pociones.
         if (vidaJugador == null)
         {
@@ -85,10 +110,64 @@ public class SistemaPociones : MonoBehaviour
             return;
         }
 
-        // Si se apreto la tecla configurada, intentamos usar una pocion.
-        if (Input.GetKeyDown(KeyCode.H) || Input.GetKeyDown(teclaUsarPocion))
+        // Si se detecto input de pocion, intentamos consumirla.
+        if (inputPocionDetectado)
         {
             IntentarUsarPocion();
+        }
+    }
+
+    // Este metodo recupera la referencia de VidaJugador si se pierde tras reinicios o recargas.
+    private void RebindVidaJugadorSiHaceFalta(bool forzarIntento)
+    {
+        // Si ya existe la referencia, no hace falta buscar.
+        if (vidaJugador != null)
+        {
+            return;
+        }
+
+        // Si no forzamos y aun no toca reintentar, salimos para evitar costo cada frame.
+        if (!forzarIntento && Time.unscaledTime < tiempoProximoRebindVida)
+        {
+            return;
+        }
+
+        // Definimos cuando sera el siguiente reintento automatico.
+        tiempoProximoRebindVida = Time.unscaledTime + Mathf.Max(0.1f, intervaloRebindVida);
+
+        // Primer intento: buscar VidaJugador en el mismo objeto.
+        vidaJugador = GetComponent<VidaJugador>();
+
+        // Segundo intento: buscar VidaJugador en padre (por si este script esta en un hijo).
+        if (vidaJugador == null)
+        {
+            vidaJugador = GetComponentInParent<VidaJugador>();
+        }
+
+        // Tercer intento: usar el jugador con tag Player como ruta rapida tras reinicio.
+        if (vidaJugador == null)
+        {
+            GameObject jugadorConTag = null;
+
+            try
+            {
+                jugadorConTag = GameObject.FindWithTag("Player");
+            }
+            catch (UnityException)
+            {
+                jugadorConTag = null;
+            }
+
+            if (jugadorConTag != null)
+            {
+                vidaJugador = jugadorConTag.GetComponent<VidaJugador>();
+            }
+        }
+
+        // Cuarto intento: buscar cualquier VidaJugador activa o inactiva en la escena.
+        if (vidaJugador == null)
+        {
+            vidaJugador = FindObjectOfType<VidaJugador>(true);
         }
     }
 
@@ -205,7 +284,14 @@ public class SistemaPociones : MonoBehaviour
         // Dibujamos un boton manual por si el usuario quiere clickearlo.
         if (GUI.Button(rectBotonUsarPocion, "Usar pocion"))
         {
-            IntentarUsarPocion();
+            // Intentamos consumir una pocion desde boton.
+            bool usoExitoso = IntentarUsarPocion();
+
+            // Si realmente se uso, dejamos traza de depuracion.
+            if (usoExitoso)
+            {
+                Debug.Log("Poción usada");
+            }
         }
 
         // Restauramos el estado anterior del GUI.

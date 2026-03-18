@@ -1,10 +1,15 @@
 using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 
 // Esta clase administra toda la estamina del jugador: gasto, regeneracion, agotamiento y barra visual.
 public class Estamina : MonoBehaviour
 {
+    // Este arreglo define nombres comunes para buscar barra de estamina.
+    private static readonly string[] nombresBarraEstaminaCandidata = { "BarraEstamina", "SliderEstamina", "EstaminaBarra", "StaminaBar" };
+
     // Este evento avisa cuando cambia la estamina para que otros sistemas puedan reaccionar.
     public event Action<float, float> AlEstaminaActualizada;
 
@@ -62,6 +67,12 @@ public class Estamina : MonoBehaviour
     // Esta variable guarda cuanto tiempo de flash queda activo.
     private float tiempoFlashRestante;
 
+    // Esta variable limita cada cuanto reintentamos vincular UI.
+    private float tiempoProximoReintentoUI;
+
+    // Esta variable evita duplicar corutinas de reintento.
+    private bool reintentoUIEnCurso;
+
     // Esta propiedad permite leer cuanta estamina actual tiene el jugador.
     public float EstaminaActual => estaminaActual;
 
@@ -89,11 +100,8 @@ public class Estamina : MonoBehaviour
         // Nos aseguramos de que la estamina arranque dentro de valores validos.
         estaminaActual = Mathf.Clamp(estaminaActual, 0f, estaminaMaxima);
 
-        // Si no asignaste la imagen de relleno pero si la barra, intentamos encontrarla automaticamente.
-        if (imagenRellenoBarra == null && barraEstamina != null && barraEstamina.fillRect != null)
-        {
-            imagenRellenoBarra = barraEstamina.fillRect.GetComponent<Image>();
-        }
+        // Intentamos vincular la UI por si ya existe en escena.
+        IntentarVincularUI(true);
 
         // Actualizamos la barra una vez al inicio para que arranque sincronizada.
         ActualizarVisualBarra();
@@ -102,9 +110,39 @@ public class Estamina : MonoBehaviour
         NotificarCambioEstamina();
     }
 
+    // Esta funcion se ejecuta cuando el componente se habilita.
+    private void OnEnable()
+    {
+        // Nos suscribimos al evento de escena para re-vincular tras LoadScene.
+        SceneManager.sceneLoaded += ManejarEscenaCargada;
+    }
+
+    // Esta funcion se ejecuta cuando el componente se deshabilita.
+    private void OnDisable()
+    {
+        // Quitamos suscripcion para evitar callbacks invalidos.
+        SceneManager.sceneLoaded -= ManejarEscenaCargada;
+    }
+
+    // Esta funcion corre al iniciar y refuerza la vinculacion si el HUD llega tarde.
+    private void Start()
+    {
+        // Intentamos una segunda vinculacion por seguridad.
+        IntentarVincularUI(true);
+
+        // Si faltan referencias, dejamos reintentos cortos.
+        if (!TieneReferenciasUIValidas())
+        {
+            StartCoroutine(RutinaReintentarVinculacionUI(12, 0.2f));
+        }
+    }
+
     // Esta funcion corre cada frame para regenerar y animar el flash de la barra.
     private void Update()
     {
+        // Si la UI se perdio o aun no existe, reintentamos por intervalos.
+        ReintentarVinculacionUIEnUpdate();
+
         // Intentamos regenerar estamina si ya paso el delay desde el ultimo gasto.
         IntentarRegenerarEstamina();
 
@@ -259,6 +297,12 @@ public class Estamina : MonoBehaviour
     // Este metodo actualiza el Slider y el color de la barra si las referencias estan configuradas.
     private void ActualizarVisualBarra()
     {
+        // Si faltan referencias, intentamos recuperarlas antes de usar UI.
+        if (!TieneReferenciasUIValidas())
+        {
+            IntentarVincularUI(false);
+        }
+
         // Si existe una barra asignada, sincronizamos sus limites y valor.
         if (barraEstamina != null)
         {
@@ -301,5 +345,192 @@ public class Estamina : MonoBehaviour
     {
         // Lanzamos el evento con estamina actual y maxima.
         AlEstaminaActualizada?.Invoke(estaminaActual, estaminaMaxima);
+    }
+
+    // Este metodo valida si la UI minima esta disponible.
+    private bool TieneReferenciasUIValidas()
+    {
+        // Si no hay slider no podemos dibujar barra.
+        if (barraEstamina == null)
+        {
+            return false;
+        }
+
+        // Si falta fill, intentamos recuperarlo desde fillRect.
+        if (imagenRellenoBarra == null && barraEstamina.fillRect != null)
+        {
+            imagenRellenoBarra = barraEstamina.fillRect.GetComponent<Image>();
+        }
+
+        // Pedimos slider y fill para considerar UI completamente vinculada.
+        return barraEstamina != null && imagenRellenoBarra != null;
+    }
+
+    // Este metodo intenta vincular barra e imagen con varios fallbacks.
+    private void IntentarVincularUI(bool permitirBusquedaAmplia)
+    {
+        // Si falta slider, buscamos por nombres comunes.
+        if (barraEstamina == null)
+        {
+            for (int indiceNombre = 0; indiceNombre < nombresBarraEstaminaCandidata.Length; indiceNombre++)
+            {
+                GameObject objetoCandidato = GameObject.Find(nombresBarraEstaminaCandidata[indiceNombre]);
+                if (objetoCandidato == null)
+                {
+                    continue;
+                }
+
+                Slider sliderCandidato = objetoCandidato.GetComponent<Slider>();
+                if (sliderCandidato == null)
+                {
+                    sliderCandidato = objetoCandidato.GetComponentInChildren<Slider>(true);
+                }
+
+                if (sliderCandidato != null)
+                {
+                    barraEstamina = sliderCandidato;
+                    break;
+                }
+            }
+        }
+
+        // Si sigue faltando, buscamos sliders por tipo y nombre.
+        if (barraEstamina == null && permitirBusquedaAmplia)
+        {
+            Slider[] slidersEscena = FindObjectsOfType<Slider>(true);
+            for (int indiceSlider = 0; indiceSlider < slidersEscena.Length; indiceSlider++)
+            {
+                if (slidersEscena[indiceSlider] == null)
+                {
+                    continue;
+                }
+
+                string nombre = slidersEscena[indiceSlider].name.ToLowerInvariant();
+                if (nombre.Contains("estamina") || nombre.Contains("stamina"))
+                {
+                    barraEstamina = slidersEscena[indiceSlider];
+                    break;
+                }
+            }
+        }
+
+        // Fallback final pedido: cualquier slider disponible.
+        if (barraEstamina == null && permitirBusquedaAmplia)
+        {
+            barraEstamina = FindObjectOfType<Slider>(true);
+        }
+
+        // Si falta imagen, intentamos usar fillRect del slider.
+        if (imagenRellenoBarra == null && barraEstamina != null && barraEstamina.fillRect != null)
+        {
+            imagenRellenoBarra = barraEstamina.fillRect.GetComponent<Image>();
+        }
+
+        // Si sigue faltando, intentamos ubicar un hijo Fill.
+        if (imagenRellenoBarra == null && barraEstamina != null)
+        {
+            Transform fillDirecto = barraEstamina.transform.Find("Fill Area/Fill");
+            if (fillDirecto == null)
+            {
+                fillDirecto = barraEstamina.transform.Find("Fill");
+            }
+
+            if (fillDirecto != null)
+            {
+                imagenRellenoBarra = fillDirecto.GetComponent<Image>();
+            }
+        }
+
+        // Si aun falta fill y se permite busqueda amplia, buscamos por nombre en toda la escena.
+        if (imagenRellenoBarra == null && permitirBusquedaAmplia)
+        {
+            Image[] imagenesEscena = FindObjectsOfType<Image>(true);
+            for (int indiceImagen = 0; indiceImagen < imagenesEscena.Length; indiceImagen++)
+            {
+                if (imagenesEscena[indiceImagen] == null)
+                {
+                    continue;
+                }
+
+                string nombre = imagenesEscena[indiceImagen].name.ToLowerInvariant();
+                if (nombre.Contains("fill") && (nombre.Contains("estamina") || nombre.Contains("stamina")))
+                {
+                    imagenRellenoBarra = imagenesEscena[indiceImagen];
+                    break;
+                }
+            }
+        }
+    }
+
+    // Este metodo reintenta vinculacion desde Update en intervalos.
+    private void ReintentarVinculacionUIEnUpdate()
+    {
+        // Si ya estan slider y fill validos no hace falta buscar.
+        if (TieneReferenciasUIValidas())
+        {
+            return;
+        }
+
+        // Si no toca reintento todavia, salimos.
+        if (Time.unscaledTime < tiempoProximoReintentoUI)
+        {
+            return;
+        }
+
+        // Programamos siguiente intento.
+        tiempoProximoReintentoUI = Time.unscaledTime + 0.5f;
+
+        // Reintentamos vinculacion completa.
+        IntentarVincularUI(true);
+    }
+
+    // Esta corutina reintenta vincular UI varias veces por si aparece tarde.
+    private IEnumerator RutinaReintentarVinculacionUI(int cantidadIntentos, float esperaEntreIntentos)
+    {
+        // Evitamos corutinas duplicadas.
+        if (reintentoUIEnCurso)
+        {
+            yield break;
+        }
+
+        // Marcamos reintento en curso.
+        reintentoUIEnCurso = true;
+
+        // Ejecutamos intentos limitados.
+        for (int intento = 0; intento < cantidadIntentos; intento++)
+        {
+            // Si ya esta vinculada la barra, terminamos.
+            if (barraEstamina != null)
+            {
+                break;
+            }
+
+            // Reintentamos con busqueda completa.
+            IntentarVincularUI(true);
+
+            // Esperamos entre intentos.
+            yield return new WaitForSecondsRealtime(esperaEntreIntentos);
+        }
+
+        // Marcamos fin de la rutina.
+        reintentoUIEnCurso = false;
+    }
+
+    // Este callback se ejecuta al cargar una escena nueva.
+    private void ManejarEscenaCargada(Scene escenaCargada, LoadSceneMode modoCarga)
+    {
+        // Limpiamos referencias para re-vincular con UI de la nueva escena.
+        barraEstamina = null;
+        imagenRellenoBarra = null;
+        tiempoProximoReintentoUI = 0f;
+
+        // Intentamos vincular enseguida.
+        IntentarVincularUI(true);
+
+        // Si sigue faltando, lanzamos reintentos.
+        if (gameObject.activeInHierarchy)
+        {
+            StartCoroutine(RutinaReintentarVinculacionUI(15, 0.2f));
+        }
     }
 }
