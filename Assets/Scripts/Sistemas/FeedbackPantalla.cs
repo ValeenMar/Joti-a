@@ -11,6 +11,9 @@ public class FeedbackPantalla : MonoBehaviour
     // Esta referencia apunta al sistema de espada para saber si hay un enemigo en rango.
     [SerializeField] private SistemaEspada sistemaEspada;
 
+    // Esta referencia apunta a la vida del jugador para mostrar vignette y feedback de dano.
+    [SerializeField] private VidaJugador vidaJugadorObjetivo;
+
     // Estas referencias apuntan a las cuatro lineas del crosshair.
     [SerializeField] private RectTransform lineaSuperior;
     [SerializeField] private RectTransform lineaInferior;
@@ -22,6 +25,21 @@ public class FeedbackPantalla : MonoBehaviour
 
     // Esta imagen cubre toda la pantalla y se usa para el flash critico.
     [SerializeField] private Image imagenFlashPantalla;
+
+    // Esta intensidad define el flash rojo por dano normal.
+    [SerializeField] private float duracionFlashDanioNormal = 0.2f;
+
+    // Este color se usa para el flash rojo por dano normal.
+    [SerializeField] private Color colorFlashDanioNormal = new Color(1f, 0.2f, 0.2f, 0.28f);
+
+    // Este umbral define cuando empieza la vignette de vida baja.
+    [SerializeField] private float umbralVidaVignette = 0.3f;
+
+    // Esta intensidad define cuanto se nota la vignette cuando la vida esta baja.
+    [SerializeField] private float intensidadVignette = 0.45f;
+
+    // Este valor define la fuerza del pulso de vignette en vida baja.
+    [SerializeField] private float velocidadPulsoVignette = 2.2f;
 
     // Este color es el color normal del crosshair cuando no hay objetivo.
     [SerializeField] private Color colorCrosshairNormal = Color.white;
@@ -56,14 +74,23 @@ public class FeedbackPantalla : MonoBehaviour
     // Esta variable guarda el alpha actual del flash critico.
     private float alphaFlashActual;
 
+    // Esta variable guarda el alpha actual del flash rojo por dano normal.
+    private float alphaFlashDanioNormal;
+
     // Esta referencia guarda la corrutina activa del freeze frame.
     private Coroutine corrutinaFreezeActiva;
 
     // Esta referencia guarda la corrutina activa del flash critico.
     private Coroutine corrutinaFlashActiva;
 
+    // Esta referencia guarda la corrutina activa del flash por dano normal.
+    private Coroutine corrutinaFlashDanioNormalActiva;
+
     // Esta variable guarda el timeScale previo para restaurarlo tras el freeze.
     private float timeScaleAnterior = 1f;
+
+    // Esta textura representa una vignette radial simple construida en runtime.
+    private Texture2D texturaVignette;
 
     // Esta funcion se ejecuta cuando el objeto se crea.
     private void Awake()

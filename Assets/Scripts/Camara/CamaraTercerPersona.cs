@@ -412,12 +412,38 @@ public class CamaraTercerPersona : MonoBehaviour
     private void IntentarAsignarObjetivoAutomatico()
     {
         // Primero intentamos buscar un objeto con tag Player para flujos estandar.
-        GameObject posibleJugador = GameObject.FindGameObjectWithTag("Player");
+        GameObject posibleJugador = null;
+
+        try
+        {
+            posibleJugador = GameObject.FindGameObjectWithTag("Player");
+        }
+        catch (UnityException)
+        {
+            posibleJugador = null;
+        }
+
+        // Si el objeto encontrado por tag no es realmente un jugador jugable, lo descartamos.
+        if (posibleJugador != null && posibleJugador.GetComponent<VidaJugador>() == null && posibleJugador.GetComponent<MovimientoJugador>() == null)
+        {
+            posibleJugador = null;
+        }
 
         // Si no hay tag Player, usamos el nombre Jugador del objeto de la escena actual.
         if (posibleJugador == null)
         {
             posibleJugador = GameObject.Find("Jugador");
+        }
+
+        // Si tampoco apareció por nombre, buscamos cualquier VidaJugador como fallback seguro.
+        if (posibleJugador == null)
+        {
+            VidaJugador vidaJugador = FindObjectOfType<VidaJugador>(true);
+
+            if (vidaJugador != null)
+            {
+                posibleJugador = vidaJugador.gameObject;
+            }
         }
 
         // Si todavia no encontramos jugador, salimos y probaremos en otro frame.

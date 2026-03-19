@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-// Esta clase administra la vida del enemigo y recibe dano desde el sistema de combate.
+// Esta clase administra la vida del enemigo y coordina su muerte con la animacion.
 public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
 {
     // Esta variable define la vida maxima del enemigo.
@@ -16,8 +16,17 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
     // Esta variable publica te deja arrastrar desde el Inspector el prefab de la orbe de experiencia.
     public GameObject prefabOrbeExperiencia;
 
+    // Esta referencia guarda el controlador visual del esqueleto.
+    [SerializeField] private ControladorAnimacionEnemigo controladorAnimacionEnemigo;
+
     // Esta variable evita procesar dano una vez que el enemigo ya murio.
     private bool estaMuerto;
+
+    // Esta variable evita completar la muerte mas de una vez.
+    private bool muerteProcesada;
+
+    // Esta referencia guarda una posible finalizacion de respaldo si falta el evento de animacion.
+    private Coroutine rutinaMuerteFallback;
 
     // Este evento avisa cambios de vida para actualizar UI de barra flotante.
     public event Action<float, float> AlVidaActualizada;
@@ -40,14 +49,74 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
     // Esta propiedad expone la experiencia que suelta al morir.
     public int ExperienciaOtorgada => experienciaOtorgada;
 
-    // Esta funcion se ejecuta cuando el objeto se activa en escena.
     private void Awake()
     {
-        // Aseguramos que al iniciar la vida actual sea igual a la vida maxima.
         vidaActual = vidaMaxima;
-
-        // Marcamos al enemigo como vivo al iniciar.
         estaMuerto = false;
+        muerteProcesada = false;
+        BuscarYConectarControladorAnimacion();
+    }
+
+    private void OnEnable()
+    {
+        BuscarYConectarControladorAnimacion();
+    }
+
+    private void Start()
+    {
+        BuscarYConectarControladorAnimacion();
+    }
+
+    private void OnDisable()
+    {
+        DesconectarControladorAnimacion();
+
+        if (rutinaMuerteFallback != null)
+        {
+            StopCoroutine(rutinaMuerteFallback);
+            rutinaMuerteFallback = null;
+        }
+    }
+
+    // Este metodo intenta encontrar el controlador visual y conectarlo al evento de muerte.
+    private void BuscarYConectarControladorAnimacion()
+    {
+        // Buscamos el controlador en hijos, incluyendo objetos inactivos.
+        ControladorAnimacionEnemigo controladorEncontrado = GetComponentInChildren<ControladorAnimacionEnemigo>(true);
+
+        // Si no lo encontramos en hijos, probamos en el mismo objeto.
+        if (controladorEncontrado == null)
+        {
+            controladorEncontrado = GetComponent<ControladorAnimacionEnemigo>();
+        }
+
+        // Si no hay cambios, no hacemos trabajo extra.
+        if (controladorAnimacionEnemigo == controladorEncontrado)
+        {
+            return;
+        }
+
+        // Desconectamos el controlador viejo si existia.
+        DesconectarControladorAnimacion();
+
+        // Guardamos la nueva referencia.
+        controladorAnimacionEnemigo = controladorEncontrado;
+
+        // Si ahora si hay controlador, escuchamos el final de la animacion de muerte.
+        if (controladorAnimacionEnemigo != null)
+        {
+            controladorAnimacionEnemigo.OnMuerteAnimacionTerminada += ManejarMuerteAnimacionTerminada;
+        }
+    }
+
+    // Este metodo quita la suscripcion al controlador visual si estaba conectada.
+    private void DesconectarControladorAnimacion()
+    {
+        if (controladorAnimacionEnemigo != null)
+        {
+            controladorAnimacionEnemigo.OnMuerteAnimacionTerminada -= ManejarMuerteAnimacionTerminada;
+            controladorAnimacionEnemigo = null;
+        }
     }
 
     // Este metodo recibe dano desde cualquier sistema que use IRecibidorDanio.
@@ -56,29 +125,24 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
         // Si ya esta muerto, ignoramos nuevos impactos.
         if (estaMuerto)
         {
-            // Salimos para evitar eventos duplicados.
             return;
         }
 
         // Si llega un dato nulo, creamos uno basico para no romper el flujo.
         if (datosDanio == null)
         {
-            // Creamos datos por defecto para que el sistema sea robusto.
             datosDanio = new DatosDanio();
         }
 
         // Si el objetivo no viene seteado, lo forzamos al enemigo actual.
         if (datosDanio.objetivo == null)
         {
-            // El objetivo real de este dano es este gameObject.
             datosDanio.objetivo = gameObject;
         }
 
         // Restamos el dano final calculado por zona debil.
-        vidaActual -= datosDanio.DanioFinalCalculado;
-
-        // Evitamos que la vida baje de cero.
-        vidaActual = Mathf.Max(0f, vidaActual);
+        float danioFinal = Mathf.Max(0f, datosDanio.DanioFinalCalculado);
+        vidaActual = Mathf.Max(0f, vidaActual - danioFinal);
 
         // Notificamos el golpe para dano flotante y feedback general.
         EventosJuego.NotificarDanioAplicado(datosDanio);
@@ -89,32 +153,86 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
         // Avisamos a la barra de vida cuanto queda.
         AlVidaActualizada?.Invoke(vidaActual, vidaMaxima);
 
-        // Si la vida llego a cero, procesamos muerte.
+        // Si la vida llego a cero, iniciamos la muerte animada.
         if (vidaActual <= 0f)
         {
-            // Ejecutamos el flujo central de muerte.
-            ProcesarMuerte(datosDanio);
+            IniciarMuerteAnimada(datosDanio);
+            return;
+        }
+
+        // Si sigue vivo, reproducimos el golpe visual de retroceso.
+        if (controladorAnimacionEnemigo != null)
+        {
+            controladorAnimacionEnemigo.ReproducirRecibirDanio(datosDanio);
         }
     }
 
-    // Este metodo centraliza todo lo que pasa cuando el enemigo muere.
-    private void ProcesarMuerte(DatosDanio datosDanio)
+    // Este metodo centraliza el inicio de la muerte.
+    private void IniciarMuerteAnimada(DatosDanio datosDanio)
     {
-        // Marcamos al enemigo como muerto para bloquear logica futura.
+        // Marcamos al enemigo como muerto para bloquear nuevos golpes.
         estaMuerto = true;
+        muerteProcesada = false;
+
+        // Guardamos el golpe fatal para usarlo cuando termine la animacion.
+        ultimoDanioFatal = datosDanio;
+
+        // Si hay controlador visual, reproducimos la animacion de muerte.
+        if (controladorAnimacionEnemigo != null)
+        {
+            controladorAnimacionEnemigo.ReproducirMorir();
+        }
+        else
+        {
+            // Si falta el controlador, usamos un respaldo para no dejar el enemigo trabado.
+            if (rutinaMuerteFallback != null)
+            {
+                StopCoroutine(rutinaMuerteFallback);
+            }
+
+            rutinaMuerteFallback = StartCoroutine(RutinaMuerteFallback());
+        }
+    }
+
+    // Esta corrutina finaliza la muerte si no llego el evento de animacion.
+    private System.Collections.IEnumerator RutinaMuerteFallback()
+    {
+        yield return new WaitForSeconds(0.2f);
+        ManejarMuerteAnimacionTerminada();
+    }
+
+    // Este metodo se llama cuando el Animation Event de muerte indica que ya termino.
+    private void ManejarMuerteAnimacionTerminada()
+    {
+        // Evitamos procesar la muerte dos veces.
+        if (muerteProcesada)
+        {
+            return;
+        }
+
+        muerteProcesada = true;
+
+        // Si habia un respaldo corriendo, lo detenemos.
+        if (rutinaMuerteFallback != null)
+        {
+            StopCoroutine(rutinaMuerteFallback);
+            rutinaMuerteFallback = null;
+        }
 
         // Si hay un prefab de orbe asignado, lo instanciamos justo en la posicion del enemigo.
         if (prefabOrbeExperiencia != null)
         {
-            // Creamos la orbe en el mismo lugar donde murio el enemigo.
             Instantiate(prefabOrbeExperiencia, transform.position, Quaternion.identity);
         }
 
         // En Mirror, esta notificacion deberia salir desde el servidor con autoridad.
         // [Mirror futuro] Este bloque seria llamado desde un [Command] validado por servidor.
-        EventosJuego.NotificarEnemigoEliminado(datosDanio.atacante, gameObject, experienciaOtorgada);
+        EventosJuego.NotificarEnemigoEliminado(ultimoDanioFatal != null ? ultimoDanioFatal.atacante : null, gameObject, experienciaOtorgada);
 
         // Avisamos a los componentes del enemigo que deben reaccionar a la muerte.
-        AlMorir?.Invoke(datosDanio);
+        AlMorir?.Invoke(ultimoDanioFatal);
     }
+
+    // Esta variable guarda el ultimo golpe fatal recibido.
+    private DatosDanio ultimoDanioFatal;
 }

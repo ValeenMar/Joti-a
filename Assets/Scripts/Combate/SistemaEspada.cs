@@ -109,6 +109,9 @@ public class SistemaEspada : MonoBehaviour
     // Esta referencia guarda la camara principal para orientar mejor el ataque y el cono frontal.
     private Camera camaraPrincipal;
 
+    // Esta referencia guarda el controlador de animacion del jugador para disparar ataques visuales.
+    private ControladorAnimacionJugador controladorAnimacionJugador;
+
     // Esta variable indica si estamos en medio de un ataque.
     private bool ataqueEnCurso;
 
@@ -126,6 +129,24 @@ public class SistemaEspada : MonoBehaviour
 
     // Esta referencia guarda el GameObject actual en rango de ataque.
     private GameObject objetivoActualEnRango;
+
+    // Esta variable guarda si hay un ataque animado esperando el evento de danio.
+    private bool ataquePendienteActivo;
+
+    // Esta variable guarda si el ataque pendiente es fuerte o normal.
+    private bool ataquePendienteFueFuerte;
+
+    // Esta variable guarda la direccion del swing del ataque pendiente.
+    private Vector3 direccionSwingPendiente = Vector3.forward;
+
+    // Esta variable guarda el multiplicador de danio del ataque pendiente.
+    private float multiplicadorDanioPendiente = 1f;
+
+    // Esta variable guarda el rango real del ataque pendiente.
+    private float rangoAtaquePendiente = 2.5f;
+
+    // Esta variable guarda una corrutina de seguridad por si el evento de animacion no se dispara.
+    private Coroutine corrutinaSeguridadAtaque;
 
     // Esta funcion publica permite leer la direccion del ultimo swing.
     public Vector3 UltimaDireccionSwing => ultimaDireccionSwing;
@@ -149,6 +170,15 @@ public class SistemaEspada : MonoBehaviour
         if (hitboxEspada == null)
         {
             hitboxEspada = GetComponentInChildren<HitboxEspada>();
+        }
+
+        // Buscamos el controlador de animacion en el mismo objeto para sincronizar triggers de ataque.
+        controladorAnimacionJugador = GetComponent<ControladorAnimacionJugador>();
+
+        // Si no estaba en la raiz, lo buscamos en hijos porque el Animator visual vive en el modelo 3D.
+        if (controladorAnimacionJugador == null)
+        {
+            controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
         }
 
         // Intentamos guardar la camara principal desde el inicio.
@@ -189,6 +219,17 @@ public class SistemaEspada : MonoBehaviour
         // Limpiamos las referencias internas de resaltado actual.
         feedbackObjetivoResaltadoActual = null;
         objetivoActualEnRango = null;
+
+        // Limpamos cualquier ataque pendiente para no dejar estados colgados al desactivar el objeto.
+        ataquePendienteActivo = false;
+        ataqueEnCurso = false;
+
+        // Si habia una corrutina de seguridad, la frenamos.
+        if (corrutinaSeguridadAtaque != null)
+        {
+            StopCoroutine(corrutinaSeguridadAtaque);
+            corrutinaSeguridadAtaque = null;
+        }
     }
 
     // Esta funcion registra el movimiento de mouse del frame en la cola.
@@ -282,16 +323,150 @@ public class SistemaEspada : MonoBehaviour
         // Guardamos si este ataque puntual fue fuerte o no.
         ultimoAtaqueFueFuerte = esGolpeFuerte;
 
+        // Si la referencia al controlador se perdio por un reload, la recuperamos antes de disparar la animacion.
+        if (controladorAnimacionJugador == null)
+        {
+            controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
+        }
+
+        // Marcamos que el jugador quedo comprometido con este ataque hasta que la animacion lo resuelva.
+        ataqueEnCurso = true;
+
         // Marcamos el instante mas temprano en que se podra volver a atacar.
         tiempoProximoAtaque = Time.time + enfriamientoAtaque;
 
         // Avisamos al sistema visual que el jugador acaba de atacar para crosshair y otros efectos.
         EventosJuego.NotificarJugadorLanzoAtaque(gameObject, esGolpeFuerte);
 
-        // En single player arrancamos el ataque directo.
-        // Con Mirror, aqui el cliente local enviaria un [Command] al servidor:
-        // [Command] CmdSolicitarAtaque(ultimaDireccionSwing, esGolpeFuerte, Time.time);
-        StartCoroutine(CorrutinaAtaque(ultimaDireccionSwing, multiplicadorDanioAtaque, esGolpeFuerte, rangoAtaque, delayAtaque));
+        // Guardamos los datos del ataque para que el evento de animacion los consuma luego.
+        PrepararAtaquePendiente(ultimaDireccionSwing, multiplicadorDanioAtaque, esGolpeFuerte, rangoAtaque);
+
+        // Si tenemos controlador de animacion, usamos la ruta nueva con Animation Events.
+        if (controladorAnimacionJugador != null)
+        {
+            // Disparamos la animacion correcta segun el tipo de golpe.
+            if (esGolpeFuerte)
+            {
+                controladorAnimacionJugador.ReproducirAtaqueFuerte();
+            }
+            else
+            {
+                controladorAnimacionJugador.ReproducirAtaqueNormal();
+            }
+
+            // En Mirror, aqui el cliente local enviaria un [Command] al servidor:
+            // [Command] CmdSolicitarAtaque(ultimaDireccionSwing, esGolpeFuerte, Time.time);
+            // Dejamos una seguridad por si un clip no trae el Animation Event esperado.
+            if (corrutinaSeguridadAtaque != null)
+            {
+                StopCoroutine(corrutinaSeguridadAtaque);
+            }
+
+            corrutinaSeguridadAtaque = StartCoroutine(CorrutinaSeguridadAtaque(esGolpeFuerte ? 1.0f : 0.8f));
+        }
+        else
+        {
+            // Si no hay controlador de animacion, mantenemos el flujo clasico de respaldo.
+            StartCoroutine(CorrutinaAtaque(ultimaDireccionSwing, multiplicadorDanioAtaque, esGolpeFuerte, rangoAtaque, delayAtaque));
+        }
+    }
+
+    // Este metodo guarda los datos del ataque pendiente hasta que llegue el evento de animacion.
+    private void PrepararAtaquePendiente(Vector3 direccionSwing, float multiplicadorDanioAtaque, bool esGolpeFuerte, float rangoAtaque)
+    {
+        // Marcamos que hay un ataque esperando resolverse.
+        ataquePendienteActivo = true;
+
+        // Guardamos si el golpe pendiente es fuerte.
+        ataquePendienteFueFuerte = esGolpeFuerte;
+
+        // Guardamos la direccion para calcular el impacto.
+        direccionSwingPendiente = direccionSwing.sqrMagnitude > 0.001f ? direccionSwing.normalized : Vector3.forward;
+
+        // Guardamos el multiplicador de danio del golpe.
+        multiplicadorDanioPendiente = multiplicadorDanioAtaque;
+
+        // Guardamos el rango del impacto.
+        rangoAtaquePendiente = rangoAtaque;
+    }
+
+    // Esta corrutina funciona como seguridad por si la animacion no dispara su evento de dano.
+    private IEnumerator CorrutinaSeguridadAtaque(float tiempoMaximoEspera)
+    {
+        // Esperamos a que la animacion tenga tiempo razonable de ejecutar el evento.
+        yield return new WaitForSecondsRealtime(tiempoMaximoEspera);
+
+        // Si el ataque sigue pendiente, resolvemos por respaldo y evitamos que el jugador quede trabado.
+        if (ataquePendienteActivo)
+        {
+            ProcesarGolpePendienteDesdeAnimacion(ataquePendienteFueFuerte);
+        }
+
+        // Limpiamos la referencia de seguridad.
+        corrutinaSeguridadAtaque = null;
+    }
+
+    // Este metodo lo llama la animacion cuando el golpe normal llega al frame correcto.
+    public void AplicarDanioNormal()
+    {
+        // Si el ataque pendiente no era normal, ignoramos este evento.
+        if (!ataquePendienteActivo || ataquePendienteFueFuerte)
+        {
+            return;
+        }
+
+        // Procesamos el impacto usando los datos guardados.
+        ProcesarGolpePendienteDesdeAnimacion(false);
+    }
+
+    // Este metodo lo llama la animacion cuando el golpe fuerte llega al frame correcto.
+    public void AplicarDanioFuerte()
+    {
+        // Si el ataque pendiente no era fuerte, ignoramos este evento.
+        if (!ataquePendienteActivo || !ataquePendienteFueFuerte)
+        {
+            return;
+        }
+
+        // Procesamos el impacto usando los datos guardados.
+        ProcesarGolpePendienteDesdeAnimacion(true);
+    }
+
+    // Este metodo concentra el proceso real de impacto que llega desde Animation Events o desde la seguridad fallback.
+    private void ProcesarGolpePendienteDesdeAnimacion(bool esGolpeFuerteEvento)
+    {
+        // Si no habia ataque pendiente, no hacemos nada.
+        if (!ataquePendienteActivo)
+        {
+            return;
+        }
+
+        // Si el tipo de evento no coincide con el tipo pendiente, no resolvemos para no duplicar impactos.
+        if (ataquePendienteFueFuerte != esGolpeFuerteEvento)
+        {
+            return;
+        }
+
+        // Buscamos el mejor objetivo disponible en el rango del ataque pendiente.
+        ObjetivoAtaque objetivoAtaque;
+        bool encontroObjetivo = IntentarBuscarMejorObjetivoEnRango(rangoAtaquePendiente, out objetivoAtaque);
+
+        // Si encontramos un objetivo valido, aplicamos el dano.
+        if (encontroObjetivo)
+        {
+            AplicarGolpeAlObjetivo(objetivoAtaque, direccionSwingPendiente, multiplicadorDanioPendiente, esGolpeFuerteEvento);
+        }
+
+        // Limpiamos el estado de ataque para permitir el siguiente swing.
+        ataquePendienteActivo = false;
+        ataqueEnCurso = false;
+
+        // Si habia una corrutina de seguridad corriendo, la cancelamos porque el evento ya resolvio el impacto.
+        if (corrutinaSeguridadAtaque != null)
+        {
+            StopCoroutine(corrutinaSeguridadAtaque);
+            corrutinaSeguridadAtaque = null;
+        }
     }
 
     // Esta funcion calcula direccion de swing usando movimientos recientes del mouse.

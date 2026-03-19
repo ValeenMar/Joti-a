@@ -74,7 +74,7 @@ public class EnemigoDummy : MonoBehaviour
     // Este tiempo representa el cooldown entre ataques consecutivos.
     [SerializeField] private float tiempoEntreAtaques = 1.5f;
 
-    // Este retraso crea sensacion de peso antes de que entre el dano.
+    // Este retraso se usa solo como respaldo si el Animation Event no dispara el dano.
     [SerializeField] private float delayImpactoAtaque = 0.35f;
 
     // Este tiempo define cuanto tarda en caer antes de desaparecer.
@@ -114,6 +114,15 @@ public class EnemigoDummy : MonoBehaviour
     // Guarda referencia de la rutina de muerte para evitar duplicados.
     private Coroutine rutinaMuerteActiva;
 
+    // Guarda referencia de la rutina de respaldo del ataque.
+    private Coroutine rutinaAtaqueRespaldoActiva;
+
+    // Guarda la referencia al controlador visual del modelo esqueleto.
+    [SerializeField] private ControladorAnimacionEnemigo controladorAnimacionEnemigo;
+
+    // Esta bandera marca si el dano del ataque ya se aplico por evento.
+    private bool danioAtaqueAplicado;
+
     // Esta variable guarda la ultima posicion donde vio al jugador.
     private Vector3 ultimaPosicionVistaJugador;
 
@@ -138,6 +147,9 @@ public class EnemigoDummy : MonoBehaviour
     // Esta variable guarda cuando volver a intentar engancharse al NavMesh.
     private float tiempoProximoReintentoNavMesh;
 
+    // Esta propiedad expone el estado actual para el controlador de animacion.
+    public EstadosEnemigo EstadoActual => estadoActual;
+
     // Esta funcion se ejecuta al iniciar el objeto.
     private void Awake()
     {
@@ -152,6 +164,9 @@ public class EnemigoDummy : MonoBehaviour
 
         // Validamos parametros de vision para que arranquen en valores robustos.
         ValidarParametrosVision();
+
+        // Buscamos el controlador visual una vez al iniciar.
+        BuscarControladorAnimacion();
     }
 
     // Esta funcion se ejecuta cuando el objeto se habilita.
@@ -159,6 +174,9 @@ public class EnemigoDummy : MonoBehaviour
     {
         // Escuchamos el evento de muerte para iniciar la secuencia final.
         vidaEnemigo.AlMorir += ManejarMuerteEnemigo;
+
+        // Reanudamos la busqueda del controlador visual por seguridad.
+        BuscarControladorAnimacion();
 
         // Reintentamos inicializacion diferida para soportar respawn o reload.
         IniciarInicializacionDiferida();
@@ -177,6 +195,20 @@ public class EnemigoDummy : MonoBehaviour
             rutinaInicializacionIA = null;
         }
 
+        // Si habia un ataque pendiente, lo detenemos.
+        if (rutinaAtaqueRespaldoActiva != null)
+        {
+            StopCoroutine(rutinaAtaqueRespaldoActiva);
+            rutinaAtaqueRespaldoActiva = null;
+        }
+
+        // Si habia una muerte en curso, la detenemos para no dejar corrutinas colgadas.
+        if (rutinaMuerteActiva != null)
+        {
+            StopCoroutine(rutinaMuerteActiva);
+            rutinaMuerteActiva = null;
+        }
+
         // Marcamos la IA como no inicializada para el proximo enable.
         iaInicializada = false;
     }
@@ -186,6 +218,9 @@ public class EnemigoDummy : MonoBehaviour
     {
         // Pedimos inicializacion diferida para soportar carga post-restart.
         IniciarInicializacionDiferida();
+
+        // Volvemos a buscar el controlador por si Unity rearmo la escena.
+        BuscarControladorAnimacion();
     }
 
     // Esta funcion se ejecuta cada frame para actualizar IA.
@@ -236,6 +271,19 @@ public class EnemigoDummy : MonoBehaviour
 
         // Ejecutamos la logica especifica del estado elegido.
         EjecutarEstadoActual();
+    }
+
+    // Este metodo busca el controlador de animacion del modelo esqueleto.
+    private void BuscarControladorAnimacion()
+    {
+        // Si ya tenemos referencia, no repetimos la busqueda.
+        if (controladorAnimacionEnemigo != null)
+        {
+            return;
+        }
+
+        // Buscamos el controlador en hijos, incluyendo objetos inactivos.
+        controladorAnimacionEnemigo = GetComponentInChildren<ControladorAnimacionEnemigo>(true);
     }
 
     // Este metodo intenta localizar un jugador con VidaJugador en la escena.
@@ -550,50 +598,93 @@ public class EnemigoDummy : MonoBehaviour
             return;
         }
 
-        // Iniciamos la rutina de ataque con delay de impacto.
-        StartCoroutine(RutinaAtacar());
+        // Iniciamos la rutina de ataque y dejamos que el Animation Event marque el impacto.
+        rutinaAtaqueRespaldoActiva = StartCoroutine(RutinaAtacar());
     }
 
-    // Esta corutina ejecuta el ataque con retraso para sensacion de peso.
+    // Esta corutina deja un respaldo por si el Animation Event del swing no aparece.
     private IEnumerator RutinaAtacar()
     {
         // Marcamos que hay un ataque en progreso.
         ataqueEnCurso = true;
+        danioAtaqueAplicado = false;
+
+        // Reproducimos la animacion de ataque desde el controlador visual.
+        BuscarControladorAnimacion();
+        if (controladorAnimacionEnemigo != null)
+        {
+            controladorAnimacionEnemigo.ReproducirAtacar();
+        }
 
         // En Mirror, desde aqui deberia lanzarse un [Command] al servidor.
         // [Mirror futuro] Validar distancia y cooldown en servidor antes del dano real.
 
-        // Esperamos el delay antes de aplicar el golpe.
-        yield return new WaitForSeconds(delayImpactoAtaque);
+        // Esperamos un tiempo corto solo como respaldo.
+        yield return new WaitForSeconds(Mathf.Max(0.05f, delayImpactoAtaque));
 
         // Si el enemigo murio durante la espera, cancelamos.
         if (!vidaEnemigo.EstaVivo)
         {
-            ataqueEnCurso = false;
+            FinalizarAtaque();
             yield break;
         }
 
         // Si el objetivo desaparecio durante la espera, cancelamos.
         if (objetivoJugador == null)
         {
-            ataqueEnCurso = false;
+            FinalizarAtaque();
             yield break;
         }
 
-        // Revalidamos distancia para no pegar a distancia irreal.
-        float distanciaActual = Vector3.Distance(transform.position, objetivoJugador.position);
-
-        // Si sigue en rango de ataque, aplicamos dano.
-        if (distanciaActual <= distanciaAtaque + 0.25f)
+        // Si el evento no aplico el dano, lo resolvemos ahora.
+        if (!danioAtaqueAplicado)
         {
             AplicarDanioAlJugador();
         }
 
+        // Cerramos el ciclo de ataque.
+        FinalizarAtaque();
+    }
+
+    // Este metodo lo llama el Animation Event del swing para aplicar el dano exacto.
+    public void AplicarDanioAtaqueDesdeAnimacion()
+    {
+        // Si el ataque no esta activo o ya se consumo, no hacemos nada.
+        if (!ataqueEnCurso || danioAtaqueAplicado || !vidaEnemigo.EstaVivo)
+        {
+            return;
+        }
+
+        // Volvemos a validar distancia para evitar golpes fantasmas.
+        if (objetivoJugador != null)
+        {
+            float distanciaActual = Vector3.Distance(transform.position, objetivoJugador.position);
+            if (distanciaActual <= distanciaAtaque + 0.25f)
+            {
+                AplicarDanioAlJugador();
+            }
+        }
+
+        // Marcamos el dano como aplicado y cerramos el ataque.
+        danioAtaqueAplicado = true;
+        FinalizarAtaque();
+    }
+
+    // Este metodo centraliza la limpieza del ataque y su cooldown.
+    private void FinalizarAtaque()
+    {
         // Guardamos cuando podra atacar nuevamente.
         tiempoProximoAtaque = Time.time + tiempoEntreAtaques;
 
-        // Marcamos que termino el ataque actual.
+        // Apagamos la bandera de ataque activo.
         ataqueEnCurso = false;
+
+        // Si habia una corrutina de respaldo, la detenemos.
+        if (rutinaAtaqueRespaldoActiva != null)
+        {
+            StopCoroutine(rutinaAtaqueRespaldoActiva);
+            rutinaAtaqueRespaldoActiva = null;
+        }
     }
 
     // Este metodo aplica dano al objetivo jugador usando directamente VidaJugador.
@@ -628,6 +719,10 @@ public class EnemigoDummy : MonoBehaviour
         // Cambiamos estado interno a muerto.
         estadoActual = EstadosEnemigo.Muerto;
 
+        // Cortamos cualquier ataque que estuviera a medias.
+        FinalizarAtaque();
+        danioAtaqueAplicado = false;
+
         // Frenamos cualquier intento de navegacion.
         if (agenteNavMesh != null && agenteNavMesh.enabled)
         {
@@ -644,7 +739,7 @@ public class EnemigoDummy : MonoBehaviour
         rutinaMuerteActiva = StartCoroutine(RutinaMuerte());
     }
 
-    // Esta corutina hace caer al enemigo y destruye el objeto.
+    // Esta corutina limpia el cuerpo muerto y luego destruye el objeto.
     private IEnumerator RutinaMuerte()
     {
         // Desactivamos colliders para evitar choques raros tras morir.
@@ -654,24 +749,6 @@ public class EnemigoDummy : MonoBehaviour
         for (int i = 0; i < colliders.Length; i++)
         {
             colliders[i].enabled = false;
-        }
-
-        // Guardamos rotacion inicial para animar caida suave.
-        Quaternion rotacionInicial = transform.rotation;
-
-        // Calculamos rotacion final inclinada hacia adelante.
-        Quaternion rotacionFinal = Quaternion.Euler(90f, transform.eulerAngles.y, transform.eulerAngles.z);
-
-        // Inicializamos temporizador interno de caida.
-        float tiempoCaida = 0f;
-
-        // Mientras no termine el tiempo de caida, interpolamos.
-        while (tiempoCaida < duracionCaida)
-        {
-            tiempoCaida += Time.deltaTime;
-            float progreso = Mathf.Clamp01(tiempoCaida / duracionCaida);
-            transform.rotation = Quaternion.Slerp(rotacionInicial, rotacionFinal, progreso);
-            yield return null;
         }
 
         // Esperamos el tiempo configurado antes de destruir.
@@ -1075,6 +1152,7 @@ public class EnemigoDummy : MonoBehaviour
         tiempoProximoChequeoVision = 0f;
         jugadorVisibleEnEsteFrame = false;
         ataqueEnCurso = false;
+        danioAtaqueAplicado = false;
         tiempoProximoReintentoNavMesh = Time.time;
     }
 
@@ -1099,10 +1177,10 @@ public class EnemigoDummy : MonoBehaviour
             anguloVision = AnguloVisionRecomendado;
         }
 
-        // Aplicamos limites para evitar valores extremos que rompan el comportamiento.
-        intervaloChequeoVision = Mathf.Clamp(intervaloChequeoVision, 0.05f, 1f);
-        rangoVision = Mathf.Clamp(rangoVision, 1f, 100f);
-        anguloVision = Mathf.Clamp(anguloVision, 10f, 179f);
+        // Forzamos minimos saludables para que la IA no quede ciega por una config vieja de escena.
+        intervaloChequeoVision = Mathf.Clamp(intervaloChequeoVision, 0.05f, IntervaloVisionRecomendado);
+        rangoVision = Mathf.Clamp(rangoVision, RangoVisionRecomendado, 100f);
+        anguloVision = Mathf.Clamp(anguloVision, AnguloVisionRecomendado, 179f);
     }
 
     // Este metodo se ejecuta en editor cuando cambia un valor serializado.

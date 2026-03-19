@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 // Este enum define los estados basicos de la partida.
 public enum EstadoPartida
@@ -127,6 +128,9 @@ public class GameManager : MonoBehaviour
         // Dejamos el cursor en modo juego al comenzar una nueva partida.
         ConfigurarCursorModoJuego();
 
+        // Si la escena no trae controlador de Game Over, lo creamos ahora para no perder la pantalla final.
+        AsegurarPantallaGameOverRuntime();
+
         // Si aun no hay jugador principal, intentamos detectar uno automaticamente.
         if (jugadorPrincipal == null)
         {
@@ -152,6 +156,13 @@ public class GameManager : MonoBehaviour
         {
             // Buscamos el primer sistema de oleadas encontrado en la escena.
             sistemaOleadas = FindObjectOfType<SistemaOleadas>();
+        }
+
+        // Si la escena no tenia sistema de oleadas, creamos uno runtime para no romper el loop jugable.
+        if (sistemaOleadas == null)
+        {
+            GameObject objetoSistemaOleadas = new GameObject("SistemaOleadas");
+            sistemaOleadas = objetoSistemaOleadas.AddComponent<SistemaOleadas>();
         }
 
         // Si encontramos sistema de oleadas, lo registramos para integracion simple.
@@ -483,6 +494,9 @@ public class GameManager : MonoBehaviour
         // Volvemos a enlazar referencias dinamicas de la escena nueva.
         ReasignarReferenciasDeEscena();
 
+        // Aseguramos otra vez la pantalla de Game Over despues de un reload.
+        AsegurarPantallaGameOverRuntime();
+
         // Si auto inicio esta activo, volvemos al estado jugando.
         if (iniciarPartidaAutomaticamente)
         {
@@ -519,5 +533,45 @@ public class GameManager : MonoBehaviour
         {
             sistemaOleadas = FindObjectOfType<SistemaOleadas>(true);
         }
+    }
+
+    // Este metodo crea un controlador de Game Over minimo si la escena no trae uno.
+    private void AsegurarPantallaGameOverRuntime()
+    {
+        // Si ya existe uno en la escena, no hacemos nada.
+        PantallaGameOver pantallaExistente = FindObjectOfType<PantallaGameOver>(true);
+
+        if (pantallaExistente != null)
+        {
+            return;
+        }
+
+        // Buscamos un Canvas donde colgar la UI final.
+        Canvas canvasExistente = FindObjectOfType<Canvas>(true);
+
+        // Si no hay Canvas, creamos uno minimo para no romper el flujo.
+        if (canvasExistente == null)
+        {
+            GameObject objetoCanvas = new GameObject("Canvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+            canvasExistente = objetoCanvas.GetComponent<Canvas>();
+            canvasExistente.renderMode = RenderMode.ScreenSpaceOverlay;
+
+            CanvasScaler canvasScaler = objetoCanvas.GetComponent<CanvasScaler>();
+            canvasScaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            canvasScaler.referenceResolution = new Vector2(1920f, 1080f);
+        }
+
+        // Creamos un objeto controlador simple bajo el Canvas.
+        GameObject controladorPantallaGameOver = new GameObject("ControlPantallaGameOver", typeof(RectTransform), typeof(PantallaGameOver));
+        controladorPantallaGameOver.transform.SetParent(canvasExistente.transform, false);
+
+        // Estiramos el controlador para que cualquier panel hijo pueda ocupar toda la pantalla.
+        RectTransform rectControlador = controladorPantallaGameOver.GetComponent<RectTransform>();
+        rectControlador.anchorMin = Vector2.zero;
+        rectControlador.anchorMax = Vector2.one;
+        rectControlador.offsetMin = Vector2.zero;
+        rectControlador.offsetMax = Vector2.zero;
+        rectControlador.localScale = Vector3.one;
+        rectControlador.SetAsLastSibling();
     }
 }

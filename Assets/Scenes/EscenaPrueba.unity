@@ -133,7 +133,7 @@ GameObject:
   - component: {fileID: 16649484}
   m_Layer: 0
   m_Name: Anclajecamara
-  m_TagString: Player
+  m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -816,7 +816,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &895791827
 MonoBehaviour:
   m_ObjectHideFlags: 0

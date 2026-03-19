@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 // COPILOT-CONTEXT:
@@ -9,6 +10,9 @@ using UnityEngine;
 // Esta clase administra la cantidad de pociones y cura al jugador cuando las usa.
 public class SistemaPociones : MonoBehaviour
 {
+    // Este evento avisa cuando una pocion se uso correctamente.
+    public static event Action<GameObject, Vector3> AlPocionUsada;
+
     // Esta referencia apunta al sistema de vida del mismo jugador.
     [SerializeField] private VidaJugador vidaJugador;
 
@@ -89,14 +93,8 @@ public class SistemaPociones : MonoBehaviour
         // Reintentamos vincular VidaJugador de forma dinamica por robustez post-restart.
         RebindVidaJugadorSiHaceFalta(false);
 
-        // Si se apreto H (o la tecla configurada), registramos el input aunque no se pueda consumir.
+        // Si se apreto H (o la tecla configurada), registramos el intento de usar pocion.
         bool inputPocionDetectado = Input.GetKeyDown(KeyCode.H) || Input.GetKeyDown(teclaUsarPocion);
-
-        // Si hubo input, dejamos una traza para depuracion.
-        if (inputPocionDetectado)
-        {
-            Debug.Log("Poción usada");
-        }
 
         // Si no tenemos vida jugador, no podemos usar pociones.
         if (vidaJugador == null)
@@ -212,6 +210,12 @@ public class SistemaPociones : MonoBehaviour
 
         // Iniciamos el enfriamiento para el siguiente uso.
         tiempoFinEnfriamiento = Time.time + enfriamientoUso;
+
+        // Mostramos en consola el resultado real para evitar confundir input con curacion exitosa.
+        Debug.Log("Poción usada -> vida actual: " + vidaJugador.VidaActual + " / " + vidaJugador.VidaMaxima + " | pociones restantes: " + cantidadActualPociones + " / " + cantidadMaximaPociones);
+
+        // Avisamos al sistema visual que se uso una pocion para disparar particulas.
+        AlPocionUsada?.Invoke(vidaJugador.gameObject, vidaJugador.transform.position);
 
         // Devolvemos verdadero para avisar que si se uso.
         return true;

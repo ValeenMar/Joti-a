@@ -54,6 +54,9 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     // Esta referencia guarda las cámaras con sacudida disponibles para reaccionar al daño.
     private SacudidaCamara[] sacudidasCamaraDisponibles;
 
+    // Esta referencia guarda el controlador de animacion del jugador para disparar dano y muerte.
+    private ControladorAnimacionJugador controladorAnimacionJugador;
+
     // Esta variable guarda hasta cuando el jugador sigue protegido contra dano extra.
     private float tiempoFinInvencibilidadDanio;
 
@@ -62,6 +65,12 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
 
     // Esta variable evita lanzar varias corutinas de reintento al mismo tiempo.
     private bool reintentoUIEnCurso;
+
+    // Esta referencia guarda la corrutina de muerte para no repetir el apagado.
+    private Coroutine rutinaMuerteJugador;
+
+    // Esta variable define cuanto esperamos antes de desactivar el jugador al morir.
+    [SerializeField] private float tiempoEsperaAntesDeDesactivarMuerte = 1f;
 
     // Esta propiedad permite leer la vida actual desde otros scripts.
     public float VidaActual => vidaActual;
@@ -84,6 +93,9 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
         // Buscamos las cámaras con sacudida para poder llamarlas si existen.
         sacudidasCamaraDisponibles = FindObjectsOfType<SacudidaCamara>(true);
 
+        // Buscamos el controlador de animacion del jugador para enlazar dano y muerte.
+        controladorAnimacionJugador = GetComponent<ControladorAnimacionJugador>();
+
         // Intentamos vincular referencias de UI por si ya existe el HUD en escena.
         IntentarVincularUI(true);
 
@@ -99,6 +111,9 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     {
         // Nos suscribimos al cambio de escena para re-vincular UI tras LoadScene.
         SceneManager.sceneLoaded += ManejarEscenaCargada;
+
+        // Reintentamos vincular el controlador de animacion por si hubo reload de escena.
+        IntentarVincularControladorAnimacion();
     }
 
     // Esta funcion se ejecuta cuando el componente se desactiva.
@@ -113,6 +128,9 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     {
         // Intentamos una segunda vinculacion por si la UI se creo entre Awake y Start.
         IntentarVincularUI(true);
+
+        // Reintentamos vincular la animacion por si aun no estaba lista en Awake.
+        IntentarVincularControladorAnimacion();
 
         // Si faltan referencias, empezamos un ciclo corto de reintentos.
         if (!TieneReferenciasUIValidas())
@@ -232,6 +250,12 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
 
         // Si existe una cámara con sacudida asociada a este jugador, le pedimos feedback de golpe.
         AplicarSacudidaPorDanio(danioFinal);
+
+        // Si existe un controlador de animacion, reproducimos el golpe recibido ahora mismo.
+        if (controladorAnimacionJugador != null)
+        {
+            controladorAnimacionJugador.ReproducirRecibirDanio();
+        }
 
         // Avisamos al resto del juego que el jugador recibió daño.
         EventosJuego.NotificarJugadorRecibioDanio(gameObject, danioFinal);
@@ -457,10 +481,10 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
             }
         }
 
-        // Fallback final pedido: buscamos cualquier slider activo/inactivo.
+        // Si no existe una barra de vida real en escena, intentamos crear una a partir de la de estamina.
         if (barraVida == null && permitirBusquedaAmplia)
         {
-            barraVida = FindObjectOfType<Slider>(true);
+            CrearBarraVidaRuntimeSiHaceFalta();
         }
 
         // Si falta imagen de relleno, intentamos tomarla del fillRect del slider.
@@ -502,6 +526,70 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
                     break;
                 }
             }
+        }
+    }
+
+    // Este metodo crea una barra de vida runtime clonando la barra de estamina si la escena no trae una.
+    private void CrearBarraVidaRuntimeSiHaceFalta()
+    {
+        // Si ya existe una barra vinculada, no hace falta crear otra.
+        if (barraVida != null)
+        {
+            return;
+        }
+
+        // Buscamos la barra de estamina como plantilla visual.
+        GameObject objetoBarraStamina = GameObject.Find("BarraStamina");
+
+        // Si no existe con ese nombre, probamos la variante con E.
+        if (objetoBarraStamina == null)
+        {
+            objetoBarraStamina = GameObject.Find("BarraEstamina");
+        }
+
+        // Si no tenemos plantilla, no podemos clonar nada.
+        if (objetoBarraStamina == null)
+        {
+            return;
+        }
+
+        // Clonamos la barra de estamina bajo el mismo padre para reutilizar su look.
+        GameObject objetoBarraVida = Instantiate(objetoBarraStamina, objetoBarraStamina.transform.parent);
+
+        // Renombramos el clon para que futuros rebindeos lo encuentren de forma directa.
+        objetoBarraVida.name = "BarraVida";
+
+        // Tomamos su RectTransform para recolocarlo por encima de la estamina.
+        RectTransform rectTransformBarraVida = objetoBarraVida.GetComponent<RectTransform>();
+
+        // Si existe el RectTransform, lo ubicamos en la posicion de vida pedida para el HUD.
+        if (rectTransformBarraVida != null)
+        {
+            rectTransformBarraVida.anchoredPosition = new Vector2(40f, -45f);
+            rectTransformBarraVida.sizeDelta = new Vector2(260f, 22f);
+        }
+
+        // Guardamos el slider del clon como nuestra barra de vida.
+        barraVida = objetoBarraVida.GetComponent<Slider>();
+
+        // Si el slider existe, ajustamos su rango a la vida actual.
+        if (barraVida != null)
+        {
+            barraVida.minValue = 0f;
+            barraVida.maxValue = vidaMaxima;
+            barraVida.value = vidaActual;
+        }
+
+        // Si el clon tiene fillRect, recuperamos la imagen de relleno para pintarla de rojo.
+        if (barraVida != null && barraVida.fillRect != null)
+        {
+            imagenRellenoBarra = barraVida.fillRect.GetComponent<Image>();
+        }
+
+        // Si encontramos el relleno, lo dejamos con el color rojo de vida.
+        if (imagenRellenoBarra != null)
+        {
+            imagenRellenoBarra.color = colorBarraNormal;
         }
     }
 
@@ -566,9 +654,13 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
         barraVida = null;
         imagenRellenoBarra = null;
         tiempoProximoReintentoUI = 0f;
+        controladorAnimacionJugador = null;
 
         // Intentamos vincular de inmediato.
         IntentarVincularUI(true);
+
+        // Reintentamos vincular la animacion en la escena nueva.
+        IntentarVincularControladorAnimacion();
 
         // Si no alcanza, dejamos una rutina de reintento.
         if (gameObject.activeInHierarchy)
@@ -580,14 +672,63 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     // Este método concentra lo que pasa cuando la vida llega a cero.
     private void ProcesarMuerte()
     {
-        // Mostramos un mensaje simple en consola para esta primera versión.
+        // Si ya habia una rutina de muerte corriendo, no iniciamos otra.
+        if (rutinaMuerteJugador != null)
+        {
+            return;
+        }
+
+        // Iniciamos la secuencia de muerte para permitir que se vea la animacion.
+        rutinaMuerteJugador = StartCoroutine(RutinaMuerteJugador());
+    }
+
+    // Esta corrutina reproduce la animacion de muerte, avisa al juego y luego desactiva el jugador.
+    private IEnumerator RutinaMuerteJugador()
+    {
+        // Mostramos un mensaje simple en consola para esta primera version.
         Debug.Log("Jugador muerto");
+
+        // Disparamos la animacion de muerte si existe un controlador.
+        IntentarVincularControladorAnimacion();
+
+        if (controladorAnimacionJugador != null)
+        {
+            controladorAnimacionJugador.ReproducirMorir();
+        }
 
         // Avisamos al resto del juego que el jugador murió.
         EventosJuego.NotificarJugadorMurio(gameObject);
 
-        // Desactivamos este objeto para que deje de participar en la escena.
-        gameObject.SetActive(false);
+        // Esperamos en tiempo real para que la animacion se vea aunque el juego entre en GameOver.
+        yield return new WaitForSecondsRealtime(Mathf.Max(0.1f, tiempoEsperaAntesDeDesactivarMuerte));
+
+        // Liberamos la referencia de la corrutina.
+        rutinaMuerteJugador = null;
+
+        // Si seguimos existiendo, apagamos el objeto para cerrar la escena de juego.
+        if (gameObject != null)
+        {
+            gameObject.SetActive(false);
+        }
+    }
+
+    // Este metodo intenta vincular el controlador de animacion si aun no lo tenemos.
+    private void IntentarVincularControladorAnimacion()
+    {
+        // Si ya hay una referencia valida, no hacemos nada.
+        if (controladorAnimacionJugador != null)
+        {
+            return;
+        }
+
+        // Buscamos en el mismo objeto primero.
+        controladorAnimacionJugador = GetComponent<ControladorAnimacionJugador>();
+
+        // Si no esta en la raiz, buscamos en hijos como respaldo.
+        if (controladorAnimacionJugador == null)
+        {
+            controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
+        }
     }
 
     // COPILOT-EXPAND: Aqui podes agregar invulnerabilidad temporal, armadura, curacion por tiempo y reanimacion cooperativa.

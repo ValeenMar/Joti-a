@@ -11,14 +11,17 @@ using UnityEngine;
 // Esta clase administra el ciclo completo de oleadas de enemigos.
 public class SistemaOleadas : MonoBehaviour
 {
-    // Este valor define un pequeno delay tras spawn para inicializar IA de forma robusta.
-    private const float DelayInicializacionIATrasSpawn = 0f;
-
     // Esta referencia apunta al GameManager de la partida.
     [SerializeField] private GameManager gameManager;
 
     // Esta referencia apunta al prefab o plantilla base del enemigo.
     [SerializeField] private GameObject prefabEnemigo;
+
+    // Esta referencia guarda una plantilla runtime limpia para no clonar enemigos ya modificados en escena.
+    private GameObject plantillaEnemigoRuntime;
+
+    // Este texto guarda un nombre seguro para las copias aunque la fuente original se destruya despues.
+    private string nombreBaseEnemigo = "EnemigoDummy";
 
     // Esta lista contiene los puntos donde pueden aparecer enemigos.
     [SerializeField] private Transform[] puntosSpawn;
@@ -100,15 +103,22 @@ public class SistemaOleadas : MonoBehaviour
             StopCoroutine(corrutinaControlOleadas);
             corrutinaControlOleadas = null;
         }
+
+        // Si habiamos creado una plantilla runtime temporal, la destruimos para no dejar basura al salir.
+        if (plantillaEnemigoRuntime != null && plantillaEnemigoRuntime != prefabEnemigo)
+        {
+            Destroy(plantillaEnemigoRuntime);
+            plantillaEnemigoRuntime = null;
+        }
     }
 
     // Esta funcion se ejecuta una vez al empezar la escena.
     private void Start()
     {
-        // Si no se asigno prefab, intentamos encontrar una plantilla usable.
-        if (prefabEnemigo == null)
+        // Si no se asigno GameManager, lo buscamos de nuevo por si fue creado antes en esta escena.
+        if (gameManager == null)
         {
-            prefabEnemigo = BuscarPlantillaEnemigoAutomaticamente();
+            gameManager = GameManager.Instancia != null ? GameManager.Instancia : FindObjectOfType<GameManager>();
         }
 
         // Si no hay puntos de spawn, intentamos encontrarlos en hijos.
@@ -117,8 +127,29 @@ public class SistemaOleadas : MonoBehaviour
             puntosSpawn = ObtenerPuntosSpawnEnHijos();
         }
 
+        // Si sigue sin haber puntos, creamos una configuracion minima alrededor del jugador.
+        if (puntosSpawn == null || puntosSpawn.Length == 0)
+        {
+            puntosSpawn = CrearPuntosSpawnPorDefecto();
+        }
+
+        // Si no se asigno prefab, intentamos encontrar una plantilla usable.
+        if (prefabEnemigo == null)
+        {
+            prefabEnemigo = BuscarPlantillaEnemigoAutomaticamente();
+        }
+
+        // Si ya conocemos una fuente base, guardamos su nombre antes de que pueda destruirse en runtime.
+        if (prefabEnemigo != null)
+        {
+            nombreBaseEnemigo = prefabEnemigo.name;
+        }
+
+        // Preparamos una fuente de spawn limpia para que las oleadas futuras no hereden estado de un enemigo muerto.
+        PrepararPlantillaEnemigoRuntimeSiHaceFalta();
+
         // Si debe iniciar solo, arrancamos el ciclo de oleadas.
-        if (iniciarAutomaticamente)
+        if (iniciarAutomaticamente && prefabEnemigo != null && puntosSpawn != null && puntosSpawn.Length > 0)
         {
             IniciarSistemaOleadas();
         }
@@ -190,8 +221,11 @@ public class SistemaOleadas : MonoBehaviour
     // Este metodo inicia una nueva oleada con cantidad escalada.
     private IEnumerator IniciarSiguienteOleada()
     {
-        // Si no hay prefab o puntos de spawn, no podemos hacer nada.
-        if (prefabEnemigo == null || puntosSpawn == null || puntosSpawn.Length == 0)
+        // Buscamos la mejor fuente de spawn disponible para esta oleada.
+        GameObject fuenteSpawnEnemigo = ObtenerFuenteSpawnEnemigo();
+
+        // Si no hay fuente de spawn o puntos, no podemos hacer nada.
+        if (fuenteSpawnEnemigo == null || puntosSpawn == null || puntosSpawn.Length == 0)
         {
             yield break;
         }
@@ -243,10 +277,19 @@ public class SistemaOleadas : MonoBehaviour
             }
 
             // Instanciamos un nuevo enemigo en ese punto.
-            GameObject enemigoCreado = Instantiate(prefabEnemigo, puntoElegido.position, puntoElegido.rotation);
+            GameObject enemigoCreado = Instantiate(fuenteSpawnEnemigo, puntoElegido.position, puntoElegido.rotation);
+
+            // Si la fuente era una plantilla inactiva, activamos la copia creada para que entre a jugar normalmente.
+            if (!enemigoCreado.activeSelf)
+            {
+                enemigoCreado.SetActive(true);
+            }
+
+            // Hacemos que el enemigo arranque mirando al jugador para que la deteccion no dependa de una rotacion azarosa.
+            OrientarEnemigoHaciaJugadorSiExiste(enemigoCreado);
 
             // Lo renombramos para depurar mejor en la jerarquia.
-            enemigoCreado.name = prefabEnemigo.name + "_Oleada_" + oleadaActual + "_" + indiceEnemigo;
+            enemigoCreado.name = nombreBaseEnemigo + "_Oleada_" + oleadaActual + "_" + indiceEnemigo;
 
             // Registramos este enemigo dentro de la oleada activa.
             enemigosActivos.Add(enemigoCreado);
@@ -276,12 +319,6 @@ public class SistemaOleadas : MonoBehaviour
 
         // Esperamos al menos al final del frame para que NavMeshAgent quede listo tras spawn/reload.
         yield return new WaitForEndOfFrame();
-
-        // Si se configuro un delay extra, lo aplicamos.
-        if (DelayInicializacionIATrasSpawn > 0f)
-        {
-            yield return new WaitForSeconds(DelayInicializacionIATrasSpawn);
-        }
 
         // Si el enemigo ya no existe despues de esperar, abortamos.
         if (enemigoCreado == null)
@@ -318,17 +355,89 @@ public class SistemaOleadas : MonoBehaviour
     // Este metodo busca una plantilla de enemigo automaticamente en la escena.
     private GameObject BuscarPlantillaEnemigoAutomaticamente()
     {
-        // Buscamos el primer EnemigoDummy disponible.
-        EnemigoDummy enemigoDummy = FindObjectOfType<EnemigoDummy>();
+        // Buscamos todos los EnemigoDummy, incluso si estan desactivados, para poder reutilizar un template de escena oculto.
+        EnemigoDummy[] enemigosDisponibles = FindObjectsOfType<EnemigoDummy>(true);
 
-        // Si encontramos uno, usamos su GameObject como plantilla.
-        if (enemigoDummy != null)
+        // Recorremos candidatos hasta encontrar uno valido como plantilla base.
+        for (int indiceEnemigo = 0; indiceEnemigo < enemigosDisponibles.Length; indiceEnemigo++)
         {
+            EnemigoDummy enemigoDummy = enemigosDisponibles[indiceEnemigo];
+
+            // Ignoramos referencias nulas por seguridad.
+            if (enemigoDummy == null)
+            {
+                continue;
+            }
+
+            // Ignoramos la propia plantilla runtime si ya existiera para no caer en recursividad rara.
+            if (plantillaEnemigoRuntime != null && enemigoDummy.gameObject == plantillaEnemigoRuntime)
+            {
+                continue;
+            }
+
+            // Tomamos el primer candidato usable y guardamos su nombre base.
+            nombreBaseEnemigo = enemigoDummy.gameObject.name;
             return enemigoDummy.gameObject;
         }
 
         // Si no hay ninguno, devolvemos nulo.
         return null;
+    }
+
+    // Este metodo deja lista una plantilla runtime limpia cuando la fuente de spawn viene de un enemigo de escena.
+    private void PrepararPlantillaEnemigoRuntimeSiHaceFalta()
+    {
+        // Si no hay fuente base configurada, no podemos preparar nada.
+        if (prefabEnemigo == null)
+        {
+            plantillaEnemigoRuntime = null;
+            return;
+        }
+
+        // Si ya existe una plantilla runtime valida, la reutilizamos sin crear otra.
+        if (plantillaEnemigoRuntime != null)
+        {
+            return;
+        }
+
+        // Si la fuente es un prefab real o un objeto fuera de escena, lo usamos directo.
+        if (!prefabEnemigo.scene.IsValid())
+        {
+            nombreBaseEnemigo = prefabEnemigo.name;
+            plantillaEnemigoRuntime = prefabEnemigo;
+            return;
+        }
+
+        // Si la fuente esta en escena, creamos una copia limpia ahora mismo para no heredar muerte, colliders apagados o estados raros.
+        plantillaEnemigoRuntime = Instantiate(prefabEnemigo, transform);
+
+        // Le damos un nombre claro para depuracion.
+        plantillaEnemigoRuntime.name = prefabEnemigo.name + "_PlantillaRuntime";
+
+        // Guardamos el nombre base seguro antes de que la fuente de escena pueda destruirse.
+        nombreBaseEnemigo = prefabEnemigo.name;
+
+        // Dejamos la plantilla apagada para que no participe de la partida.
+        plantillaEnemigoRuntime.SetActive(false);
+    }
+
+    // Este metodo devuelve la fuente correcta desde donde se deben instanciar enemigos nuevos.
+    private GameObject ObtenerFuenteSpawnEnemigo()
+    {
+        // Si por algun motivo no existe plantilla runtime pero si existe fuente base, la preparamos ahora.
+        if (plantillaEnemigoRuntime == null && prefabEnemigo != null)
+        {
+            PrepararPlantillaEnemigoRuntimeSiHaceFalta();
+        }
+
+        // Si tenemos plantilla runtime, esa es la mas segura.
+        if (plantillaEnemigoRuntime != null)
+        {
+            return plantillaEnemigoRuntime;
+        }
+
+        // Como fallback final usamos el prefab/base original.
+        return prefabEnemigo;
     }
 
     // Este metodo intenta reunir todos los puntos de spawn hijos de este objeto.
@@ -343,15 +452,150 @@ public class SistemaOleadas : MonoBehaviour
             // Guardamos referencia al hijo actual.
             Transform hijoActual = transform.GetChild(indiceHijo);
 
-            // Si el hijo existe, lo agregamos a la lista.
-            if (hijoActual != null)
+            // Ignoramos hijos nulos.
+            if (hijoActual == null)
             {
-                puntosEncontrados.Add(hijoActual);
+                continue;
             }
+
+            // Ignoramos la plantilla runtime y cualquier hijo que claramente sea un enemigo en vez de un punto de spawn.
+            if (hijoActual.GetComponent<EnemigoDummy>() != null || hijoActual.name.Contains("PlantillaRuntime"))
+            {
+                continue;
+            }
+
+            // Si paso todos los filtros, lo agregamos como punto valido.
+            puntosEncontrados.Add(hijoActual);
         }
 
         // Convertimos la lista a array y la devolvemos.
         return puntosEncontrados.ToArray();
+    }
+
+    // Este metodo crea un conjunto simple de puntos de spawn si la escena no los trae armados.
+    private Transform[] CrearPuntosSpawnPorDefecto()
+    {
+        // Buscamos o creamos un contenedor para los puntos de spawn.
+        GameObject contenedorSpawn = GameObject.Find("PuntosSpawnOleadas");
+
+        if (contenedorSpawn == null)
+        {
+            contenedorSpawn = new GameObject("PuntosSpawnOleadas");
+        }
+
+        // Si el contenedor no es hijo de este sistema, lo parentamos para mantener orden.
+        if (contenedorSpawn.transform.parent != transform)
+        {
+            contenedorSpawn.transform.SetParent(transform);
+        }
+
+        // Si ya tenia hijos, reutilizamos esos puntos existentes.
+        if (contenedorSpawn.transform.childCount > 0)
+        {
+            return ObtenerPuntosDesdeContenedor(contenedorSpawn.transform);
+        }
+
+        // Buscamos al jugador para usarlo como centro de referencia.
+        GameObject jugador = GameObject.Find("Jugador");
+
+        // Tomamos el centro del jugador o el origen si no existe.
+        Vector3 centro = jugador != null ? jugador.transform.position : Vector3.zero;
+
+        // Definimos cuatro offsets simples para que la arena vuelva a funcionar.
+        Vector3[] offsets = new Vector3[]
+        {
+            new Vector3(6f, 0f, 6f),
+            new Vector3(-6f, 0f, 6f),
+            new Vector3(6f, 0f, -6f),
+            new Vector3(-6f, 0f, -6f)
+        };
+
+        // Creamos los puntos con esos offsets.
+        for (int indiceOffset = 0; indiceOffset < offsets.Length; indiceOffset++)
+        {
+            GameObject puntoSpawn = new GameObject("PuntoSpawn_" + (indiceOffset + 1));
+            puntoSpawn.transform.SetParent(contenedorSpawn.transform);
+            puntoSpawn.transform.position = centro + offsets[indiceOffset];
+
+            // Hacemos que el punto quede orientado hacia el centro para que los enemigos nazcan mirando la arena.
+            Vector3 direccionHaciaCentro = centro - puntoSpawn.transform.position;
+            direccionHaciaCentro.y = 0f;
+
+            if (direccionHaciaCentro.sqrMagnitude > 0.001f)
+            {
+                puntoSpawn.transform.rotation = Quaternion.LookRotation(direccionHaciaCentro.normalized, Vector3.up);
+            }
+        }
+
+        // Devolvemos el array de puntos recien creado.
+        return ObtenerPuntosDesdeContenedor(contenedorSpawn.transform);
+    }
+
+    // Este metodo convierte todos los hijos de un contenedor en un array de transforms utilizable.
+    private Transform[] ObtenerPuntosDesdeContenedor(Transform contenedor)
+    {
+        // Creamos una lista temporal para reunir puntos validos.
+        List<Transform> puntos = new List<Transform>();
+
+        // Recorremos todos los hijos del contenedor.
+        for (int indiceHijo = 0; indiceHijo < contenedor.childCount; indiceHijo++)
+        {
+            Transform hijoActual = contenedor.GetChild(indiceHijo);
+
+            if (hijoActual == null)
+            {
+                continue;
+            }
+
+            // Ignoramos cualquier hijo que no sea realmente un punto de spawn util.
+            if (hijoActual.GetComponent<EnemigoDummy>() != null || hijoActual.name.Contains("PlantillaRuntime"))
+            {
+                continue;
+            }
+
+            puntos.Add(hijoActual);
+        }
+
+        // Devolvemos todos los puntos encontrados.
+        return puntos.ToArray();
+    }
+
+    // Este metodo orienta al enemigo recien creado hacia el jugador para que la IA pueda detectarlo mejor al arrancar.
+    private void OrientarEnemigoHaciaJugadorSiExiste(GameObject enemigoCreado)
+    {
+        // Si el enemigo no existe, no hacemos nada.
+        if (enemigoCreado == null)
+        {
+            return;
+        }
+
+        // Intentamos encontrar un jugador por tag.
+        GameObject jugador = null;
+
+        try
+        {
+            jugador = GameObject.FindWithTag("Player");
+        }
+        catch (UnityException)
+        {
+            jugador = GameObject.Find("Jugador");
+        }
+
+        // Si no encontramos jugador, no tocamos la rotacion.
+        if (jugador == null)
+        {
+            return;
+        }
+
+        // Calculamos una direccion horizontal hacia el jugador.
+        Vector3 direccion = jugador.transform.position - enemigoCreado.transform.position;
+        direccion.y = 0f;
+
+        // Si la direccion es valida, aplicamos una rotacion inicial mirando hacia el jugador.
+        if (direccion.sqrMagnitude > 0.001f)
+        {
+            enemigoCreado.transform.rotation = Quaternion.LookRotation(direccion.normalized, Vector3.up);
+        }
     }
 
     // Este metodo limpia referencias nulas que puedan quedar en el conjunto de enemigos.

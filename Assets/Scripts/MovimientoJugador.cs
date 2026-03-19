@@ -31,6 +31,9 @@ public class MovimientoJugador : MonoBehaviour
     // Esta variable guarda la referencia a la camara principal para mover al jugador segun lo que ve el jugador.
     private Camera camaraPrincipal;
 
+    // Esta variable guarda el controlador de animacion del jugador para sincronizar velocidad y sprint.
+    private ControladorAnimacionJugador controladorAnimacionJugador;
+
     // Esta variable guarda cuanto quiere moverse el jugador en horizontal.
     private float entradaHorizontal;
 
@@ -63,6 +66,15 @@ public class MovimientoJugador : MonoBehaviour
 
         // Aca intentamos obtener la estamina para conectar sprint y agotamiento.
         estaminaJugador = GetComponent<Estamina>();
+
+        // Buscamos el controlador de animacion en el mismo objeto para notificar velocidad y sprint.
+        controladorAnimacionJugador = GetComponent<ControladorAnimacionJugador>();
+
+        // Si no estaba en la raiz, lo buscamos en hijos porque el Animator visual vive en el modelo 3D.
+        if (controladorAnimacionJugador == null)
+        {
+            controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
+        }
 
         // Intentamos encontrar la camara principal para que el movimiento sea relativo a su direccion.
         camaraPrincipal = Camera.main;
@@ -101,6 +113,9 @@ public class MovimientoJugador : MonoBehaviour
         Vector3 direccionMovimiento = ObtenerDireccionMovimiento();
 
         // Si se aprietan dos teclas al mismo tiempo, normalizamos para que no corra mas rapido en diagonal.
+        float intensidadMovimiento = Mathf.Clamp01(direccionMovimiento.magnitude);
+
+        // Si se aprietan dos teclas al mismo tiempo, normalizamos para que no corra mas rapido en diagonal.
         if (direccionMovimiento.magnitude > 1f)
         {
             // Convertimos la direccion en una direccion de largo 1 para mantener una velocidad pareja.
@@ -130,6 +145,9 @@ public class MovimientoJugador : MonoBehaviour
         // Calculamos la posicion final a la que queremos llegar en este paso.
         Vector3 posicionDestino = cuerpoRigido.position + desplazamiento;
 
+        // Calculamos la velocidad visual que vamos a pasar al animator.
+        float velocidadVisualAnimacion = intensidadMovimiento * velocidadFinal;
+
         // Guardamos la posicion fisica anterior para poder interpolar luego en render.
         posicionFisicaAnterior = posicionFisicaActual;
 
@@ -138,6 +156,18 @@ public class MovimientoJugador : MonoBehaviour
 
         // Movemos el Rigidbody usando fisica en vez de mover el Transform a mano.
         cuerpoRigido.MovePosition(posicionDestino);
+
+        // Si existe controlador de animacion, le pasamos la velocidad y el estado de sprint actual.
+        if (controladorAnimacionJugador == null)
+        {
+            controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
+        }
+
+        // Si existe controlador de animacion, le pasamos la velocidad y el estado de sprint actual.
+        if (controladorAnimacionJugador != null)
+        {
+            controladorAnimacionJugador.SincronizarMovimiento(velocidadVisualAnimacion, estaCorriendo);
+        }
     }
 
     // Esta funcion decide si el jugador puede correr en este frame y consume estamina si corresponde.
