@@ -12,10 +12,10 @@ public class CamaraTercerPersona : MonoBehaviour
     [SerializeField] private bool alinearCamaraHijaAutomaticamente = true;
 
     // Este valor mueve fisicamente la camara hacia un costado para lograr sensacion de hombro.
-    [SerializeField] private float desplazamientoLateralCamara = 0.9f;
+    [SerializeField] private float desplazamientoLateralCamara = 0.82f;
 
     // Este valor mueve levemente el punto al que mira la camara para que el personaje no quede centrado del todo.
-    [SerializeField] private float desplazamientoLateralFoco = 0.35f;
+    [SerializeField] private float desplazamientoLateralFoco = 0.26f;
 
     // Esta tecla permite cambiar manualmente entre hombro derecho e izquierdo.
     [SerializeField] private KeyCode teclaCambiarHombro = KeyCode.Q;
@@ -27,31 +27,31 @@ public class CamaraTercerPersona : MonoBehaviour
     [SerializeField] private float velocidadCambioHombro = 6f;
 
     // Esta altura adicional sube la camara por encima del anclaje del jugador.
-    [SerializeField] private float alturaCamaraAdicional = 0.45f;
+    [SerializeField] private float alturaCamaraAdicional = 1.45f;
 
     // Esta altura adicional sube el punto de foco para mirar un poco por encima del torso.
-    [SerializeField] private float alturaFocoAdicional = 0.18f;
+    [SerializeField] private float alturaFocoAdicional = 0.8f;
 
     // Esta capa define contra que objetos se evaluara la colision de camara.
     [SerializeField] private LayerMask mascaraColision = ~0;
 
     // Esta distancia es la separacion deseada entre camara y objetivo cuando no hay obstaculos.
-    [SerializeField] private float distanciaDeseada = 4.5f;
+    [SerializeField] private float distanciaDeseada = 4.95f;
 
     // Esta distancia extra fija empuja un poco mas la camara hacia atras para darle mas aire al jugador.
-    [SerializeField] private float distanciaExtraBase = 1.25f;
+    [SerializeField] private float distanciaExtraBase = 0.2f;
 
     // Esta distancia extra se suma cuando hay enemigos cerca y la camara abre el encuadre.
-    [SerializeField] private float distanciaExtraPorAmenaza = 1.25f;
+    [SerializeField] private float distanciaExtraPorAmenaza = 0.35f;
 
     // Esta distancia define a partir de que cercania de enemigos empieza a abrirse el zoom dinamico.
-    [SerializeField] private float rangoAmenazaZoom = 6f;
+    [SerializeField] private float rangoAmenazaZoom = 5.5f;
 
     // Esta velocidad suaviza el cambio del zoom dinamico para que no se note brusco.
     [SerializeField] private float suavizadoZoom = 8f;
 
     // Esta distancia minima evita que la camara se pegue demasiado al jugador.
-    [SerializeField] private float distanciaMinima = 1.1f;
+    [SerializeField] private float distanciaMinima = 2.3f;
 
     // Este radio se usa en SphereCast para evitar atravesar paredes y piso.
     [SerializeField] private float radioColision = 0.25f;
@@ -75,19 +75,28 @@ public class CamaraTercerPersona : MonoBehaviour
     [SerializeField] private float sensibilidadMouseY = 90f;
 
     // Este limite evita que la camara mire demasiado hacia abajo.
-    [SerializeField] private float limiteMinimoVertical = -25f;
+    [SerializeField] private float limiteMinimoVertical = -35f;
 
     // Este limite evita que la camara mire demasiado hacia arriba.
-    [SerializeField] private float limiteMaximoVertical = 65f;
+    [SerializeField] private float limiteMaximoVertical = 70f;
 
     // Este valor asegura que la camara mantenga siempre un leve angulo hacia abajo.
-    [SerializeField] private float anguloVerticalMinimoPersistente = 12f;
+    [SerializeField] private float anguloVerticalMinimoPersistente = -4f;
+
+    // Esta opcion permite usar un shake interno si no existe un componente de sacudida externo.
+    [SerializeField] private bool usarShakeInternoSiNoHayComponenteExterno = true;
+
+    // Esta intensidad base se usa para sacudidas internas cuando no hay componente externo.
+    [SerializeField] private float intensidadShakeBase = 0.15f;
+
+    // Esta duracion base se usa para sacudidas internas cuando no hay componente externo.
+    [SerializeField] private float duracionShakeBase = 0.2f;
 
     // Esta variable guarda el yaw acumulado para rotacion horizontal.
     private float anguloHorizontal;
 
     // Esta variable guarda el pitch acumulado para rotacion vertical.
-    private float anguloVertical = 15f;
+    private float anguloVertical = 12f;
 
     // Esta variable guarda la velocidad interna del SmoothDamp.
     private Vector3 velocidadSuavizado;
@@ -116,11 +125,47 @@ public class CamaraTercerPersona : MonoBehaviour
     // Esta variable guarda la distancia suavizada que usa la camara en tiempo real.
     private float distanciaDeseadaSuavizada;
 
+    // Esta referencia guarda un componente de sacudida compatible si existe en la camara o su jerarquia.
+    private SacudidaCamara sacudidaCamaraCompatibilidad;
+
+    // Esta bandera indica si la camara debe manejar su propio shake interno.
+    private bool usarShakeInterno;
+
+    // Esta variable guarda la intensidad actual del shake interno.
+    private float intensidadShakeActual;
+
+    // Esta variable guarda el tiempo restante del shake interno.
+    private float tiempoShakeRestante;
+
+    // Estas semillas aleatorias evitan patrones repetitivos si usamos shake interno.
+    private float semillaShakeX;
+    private float semillaShakeY;
+
     // Esta funcion se ejecuta al iniciar para preparar referencias.
     private void Awake()
     {
+        // Aplicamos un preset base pensado para modelos 3D mas altos que la capsula original.
+        AplicarPresetVisual3D();
+
         // Guardamos la referencia de la camara de Unity para uso opcional futuro.
         camaraUnity = GetComponent<Camera>();
+
+        // Buscamos un componente de sacudida externo antes de activar el fallback interno.
+        sacudidaCamaraCompatibilidad = GetComponent<SacudidaCamara>();
+        if (sacudidaCamaraCompatibilidad == null)
+        {
+            sacudidaCamaraCompatibilidad = GetComponentInChildren<SacudidaCamara>(true);
+        }
+
+        // Si no encontramos un componente externo, habilitamos el shake interno como respaldo.
+        usarShakeInterno = sacudidaCamaraCompatibilidad == null && usarShakeInternoSiNoHayComponenteExterno;
+
+        // Si vamos a usar shake interno, dejamos semillas distintas para el ruido.
+        if (usarShakeInterno)
+        {
+            semillaShakeX = Random.Range(0f, 1000f);
+            semillaShakeY = Random.Range(0f, 1000f);
+        }
 
         // Si este script esta en el rig y no en la camara, buscamos una camara hija.
         if (camaraUnity == null)
@@ -174,6 +219,12 @@ public class CamaraTercerPersona : MonoBehaviour
     {
         // Escuchamos la carga de escena para reposicionar instantaneamente la camara tras un reinicio.
         SceneManager.sceneLoaded += AlCargarEscena;
+
+        // Si no hay componente externo de sacudida, escuchamos daño para hacer shake interno.
+        if (usarShakeInterno)
+        {
+            EventosJuego.AlJugadorRecibioDanio += ManejarJugadorRecibioDanio;
+        }
     }
 
     // Esta funcion se ejecuta al deshabilitar el componente y limpia la suscripcion de escena.
@@ -181,6 +232,12 @@ public class CamaraTercerPersona : MonoBehaviour
     {
         // Dejamos de escuchar la carga de escena para evitar referencias colgadas.
         SceneManager.sceneLoaded -= AlCargarEscena;
+
+        // Dejamos de escuchar dano si estabamos manejando el shake interno.
+        if (usarShakeInterno)
+        {
+            EventosJuego.AlJugadorRecibioDanio -= ManejarJugadorRecibioDanio;
+        }
     }
 
     // Esta funcion corre despues del movimiento del jugador y actualiza la camara.
@@ -205,7 +262,7 @@ public class CamaraTercerPersona : MonoBehaviour
         }
 
         // Mantenemos un angulo minimo de inclinacion para que la camara no quede nunca demasiado plana.
-        anguloVertical = Mathf.Clamp(anguloVertical, Mathf.Max(limiteMinimoVertical, anguloVerticalMinimoPersistente), limiteMaximoVertical);
+        anguloVertical = Mathf.Clamp(anguloVertical, limiteMinimoVertical, limiteMaximoVertical);
 
         // NOTA MIRROR: este bloque de input debe correr solo en el cliente local que controla la camara.
         // En el futuro con Mirror, normalmente esto iria ligado al LocalPlayer (hasAuthority/isLocalPlayer).
@@ -226,7 +283,7 @@ public class CamaraTercerPersona : MonoBehaviour
         anguloVertical -= entradaMouseY * sensibilidadMouseY * Time.deltaTime;
 
         // Limitamos rotacion vertical para no atravesar angulos incomodos.
-        anguloVertical = Mathf.Clamp(anguloVertical, Mathf.Max(limiteMinimoVertical, anguloVerticalMinimoPersistente), limiteMaximoVertical);
+        anguloVertical = Mathf.Clamp(anguloVertical, limiteMinimoVertical, limiteMaximoVertical);
 
         // Construimos la rotacion deseada en base a los angulos calculados.
         Quaternion rotacionDeseada = Quaternion.Euler(anguloVertical, anguloHorizontal, 0f);
@@ -300,6 +357,9 @@ public class CamaraTercerPersona : MonoBehaviour
 
         // Suavizamos la rotacion para evitar micro-jitter.
         transform.rotation = Quaternion.Slerp(transform.rotation, rotacionMirandoAlFoco, suavizadoRotacion * Time.deltaTime);
+
+        // Si estamos usando el shake interno, lo aplicamos al final para no romper el seguimiento base.
+        AplicarShakeInterno();
     }
 
     // Esta funcion calcula la distancia dinamica segun la amenaza mas cercana.
@@ -512,6 +572,21 @@ public class CamaraTercerPersona : MonoBehaviour
         direccionHombroObjetivo *= -1f;
     }
 
+    // Este metodo publico permite disparar una sacudida visual desde otros scripts.
+    public void TriggerShake(float intensidad = 0.15f, float duracion = 0.2f)
+    {
+        // Si existe un componente externo de sacudida, lo usamos para no duplicar comportamientos.
+        if (sacudidaCamaraCompatibilidad != null)
+        {
+            sacudidaCamaraCompatibilidad.AplicarSacudida(intensidad, duracion);
+            return;
+        }
+
+        // Si no hay componente externo, guardamos valores internos para aplicar el shake en esta camara.
+        intensidadShakeActual = Mathf.Max(intensidadShakeActual, intensidad > 0f ? intensidad : intensidadShakeBase);
+        tiempoShakeRestante = Mathf.Max(tiempoShakeRestante, duracion > 0f ? duracion : duracionShakeBase);
+    }
+
     // Este metodo permite saber si esta camara esta siguiendo al jugador indicado.
     public bool EstaSiguiendoJugador(GameObject jugador)
     {
@@ -590,7 +665,7 @@ public class CamaraTercerPersona : MonoBehaviour
         // Tomamos los angulos actuales como base para el reposicionamiento inmediato.
         Vector3 angulosActuales = transform.eulerAngles;
         anguloHorizontal = angulosActuales.y;
-        anguloVertical = Mathf.Clamp(Mathf.Max(angulosActuales.x, anguloVerticalMinimoPersistente), Mathf.Max(limiteMinimoVertical, anguloVerticalMinimoPersistente), limiteMaximoVertical);
+        anguloVertical = Mathf.Clamp(NormalizarAnguloEuler(angulosActuales.x), limiteMinimoVertical, limiteMaximoVertical);
 
         // Calculamos la rotacion deseada con los angulos actuales.
         Quaternion rotacionDeseada = Quaternion.Euler(anguloVertical, anguloHorizontal, 0f);
@@ -658,6 +733,97 @@ public class CamaraTercerPersona : MonoBehaviour
 
         // Si no encaja en ningun caso anterior, devolvemos la posicion del objetivo directamente.
         return objetivoSeguimiento.position;
+    }
+
+    // Este metodo aplica un preset mas abierto y alto para que el caballero no tape la pantalla.
+    private void AplicarPresetVisual3D()
+    {
+        // Forzamos un preset mas sobre hombro para que el personaje llene mejor pantalla y la camara no nazca tan baja.
+        desplazamientoLateralCamara = Mathf.Clamp(desplazamientoLateralCamara, 0.75f, 1.05f);
+
+        // Corremos tambien el foco hacia ese hombro para salir del encuadre excesivamente centrado.
+        desplazamientoLateralFoco = Mathf.Clamp(desplazamientoLateralFoco, 0.22f, 0.32f);
+
+        // Levantamos la camara para mirar mas desde hombro y menos desde la espalda baja.
+        alturaCamaraAdicional = Mathf.Clamp(alturaCamaraAdicional, 1.35f, 1.7f);
+
+        // El foco debe mirar pecho/cabeza para evitar la sensacion de camara hundida.
+        alturaFocoAdicional = Mathf.Clamp(alturaFocoAdicional, 0.72f, 0.95f);
+
+        // Acercamos la distancia base para una lectura mas de accion en tercera persona.
+        distanciaDeseada = Mathf.Clamp(distanciaDeseada, 4.6f, 5.15f);
+
+        // Suavizamos el zoom dinamico para que respire menos y no rompa la vista de hombro.
+        distanciaExtraBase = Mathf.Clamp(distanciaExtraBase, 0.15f, 0.3f);
+        distanciaExtraPorAmenaza = Mathf.Clamp(distanciaExtraPorAmenaza, 0.25f, 0.45f);
+
+        // Mantenemos un minimo seguro para no invadir demasiado al personaje cuando hay colision.
+        distanciaMinima = Mathf.Clamp(distanciaMinima, 2.2f, 2.5f);
+
+        // Acotamos los limites verticales a un rango mas estable para esta vista de accion.
+        limiteMinimoVertical = Mathf.Clamp(limiteMinimoVertical, -38f, -30f);
+        limiteMaximoVertical = Mathf.Clamp(limiteMaximoVertical, 65f, 72f);
+
+        // Reducimos la inclinacion persistente hacia abajo para que la camara no se sienta pegada al piso.
+        anguloVerticalMinimoPersistente = Mathf.Clamp(anguloVerticalMinimoPersistente, -6f, -2f);
+    }
+
+    // Este metodo responde al dano recibido cuando la camara necesita manejar su propio shake interno.
+    private void ManejarJugadorRecibioDanio(GameObject jugadorDanado, float cantidadDanio)
+    {
+        // Si no hay jugador o no estamos siguiendolo, no hacemos nada.
+        if (jugadorDanado == null || !EstaSiguiendoJugador(jugadorDanado))
+        {
+            return;
+        }
+
+        // Convertimos el dano en una sacudida pequena y agradable.
+        float intensidad = Mathf.Clamp(cantidadDanio * 0.01f, 0.03f, 0.22f);
+        TriggerShake(intensidad, 0.2f);
+    }
+
+    // Este metodo aplica el offset visual del shake interno al final del frame.
+    private void AplicarShakeInterno()
+    {
+        // Si estamos usando un componente externo, no interferimos.
+        if (!usarShakeInterno)
+        {
+            return;
+        }
+
+        // Si no queda shake activo, limpiamos el offset y salimos.
+        if (tiempoShakeRestante <= 0f && intensidadShakeActual <= 0.0001f)
+        {
+            return;
+        }
+
+        // Reducimos el tiempo restante con tiempo real para que funcione tambien durante hit stop.
+        tiempoShakeRestante -= Time.unscaledDeltaTime;
+
+        // Desvanecemos la intensidad de forma suave.
+        intensidadShakeActual = Mathf.Lerp(intensidadShakeActual, 0f, Time.unscaledDeltaTime * 10f);
+
+        // Calculamos ruido en eje X.
+        float ruidoX = (Mathf.PerlinNoise(Time.unscaledTime * 28f + semillaShakeX, 0f) - 0.5f) * 2f;
+
+        // Calculamos ruido en eje Y.
+        float ruidoY = (Mathf.PerlinNoise(0f, Time.unscaledTime * 28f + semillaShakeY) - 0.5f) * 2f;
+
+        // Aplicamos el offset sin tocar Z para no marear.
+        transform.position += new Vector3(ruidoX, ruidoY, 0f) * intensidadShakeActual;
+    }
+
+    // Este metodo normaliza un angulo Euler de 0..360 a un rango mas comodo de -180..180.
+    private float NormalizarAnguloEuler(float angulo)
+    {
+        // Si el angulo ya paso de 180, lo traemos al rango negativo equivalente.
+        if (angulo > 180f)
+        {
+            return angulo - 360f;
+        }
+
+        // Si ya estaba en rango, devolvemos el mismo valor.
+        return angulo;
     }
 
     // Este metodo dibuja gizmos utiles para depurar distancia y colision en el editor.

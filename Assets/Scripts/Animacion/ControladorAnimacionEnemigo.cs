@@ -38,6 +38,7 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
 
     private bool muerteEnCurso;
     private bool muerteNotificada;
+    private bool impactoAtaqueConsumidoEnEsteSwing;
     private Coroutine rutinaSacudidaActiva;
     private Coroutine rutinaRespaldoMuerte;
     private Vector3 posicionBaseRaizVisual;
@@ -68,6 +69,10 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
             StopCoroutine(rutinaRespaldoMuerte);
             rutinaRespaldoMuerte = null;
         }
+
+        muerteEnCurso = false;
+        muerteNotificada = false;
+        impactoAtaqueConsumidoEnEsteSwing = false;
     }
 
     private void LateUpdate()
@@ -80,11 +85,12 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
         float velocidadActual = 0f;
         if (agenteNavMesh != null && agenteNavMesh.enabled)
         {
-            velocidadActual = agenteNavMesh.velocity.magnitude;
+            float velocidadAgente = Mathf.Max(0.01f, agenteNavMesh.speed);
+            velocidadActual = Mathf.Clamp01(agenteNavMesh.velocity.magnitude / velocidadAgente);
         }
 
-        animador.SetFloat(parametroVelocidad, velocidadActual);
-        animador.SetBool(parametroPersiguiendo, enemigoDummy.EstadoActual == EstadosEnemigo.Perseguir);
+        EstablecerFloatSiExiste(parametroVelocidad, velocidadActual);
+        EstablecerBoolSiExiste(parametroPersiguiendo, enemigoDummy.EstadoActual == EstadosEnemigo.Perseguir || enemigoDummy.EstadoActual == EstadosEnemigo.Atacar);
     }
 
     private void BuscarReferencias()
@@ -139,9 +145,10 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
             return;
         }
 
-        animador.ResetTrigger(triggerRecibirDanio);
-        animador.ResetTrigger(triggerMorir);
-        animador.SetTrigger(triggerAtacar);
+        impactoAtaqueConsumidoEnEsteSwing = false;
+        ResetearTriggerSiExiste(triggerRecibirDanio);
+        ResetearTriggerSiExiste(triggerMorir);
+        DispararTriggerSiExiste(triggerAtacar);
     }
 
     public void ReproducirRecibirDanio(DatosDanio datosDanio)
@@ -151,9 +158,9 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
             return;
         }
 
-        animador.ResetTrigger(triggerAtacar);
-        animador.ResetTrigger(triggerMorir);
-        animador.SetTrigger(triggerRecibirDanio);
+        ResetearTriggerSiExiste(triggerAtacar);
+        ResetearTriggerSiExiste(triggerMorir);
+        DispararTriggerSiExiste(triggerRecibirDanio);
 
         if (feedbackCombate != null)
         {
@@ -174,7 +181,7 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
 
     public void ReproducirMorir()
     {
-        if (animador == null)
+        if (animador == null || muerteEnCurso)
         {
             NotificarMuerteAnimacionTerminada();
             return;
@@ -182,9 +189,9 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
 
         muerteEnCurso = true;
         muerteNotificada = false;
-        animador.ResetTrigger(triggerAtacar);
-        animador.ResetTrigger(triggerRecibirDanio);
-        animador.SetTrigger(triggerMorir);
+        ResetearTriggerSiExiste(triggerAtacar);
+        ResetearTriggerSiExiste(triggerRecibirDanio);
+        DispararTriggerSiExiste(triggerMorir);
 
         if (rutinaRespaldoMuerte != null)
         {
@@ -194,13 +201,31 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
         rutinaRespaldoMuerte = StartCoroutine(RutinaRespaldoMuerte());
     }
 
+    public bool EstaMuerteEnCurso => muerteEnCurso;
+
     public void AplicarDanioAtaque()
     {
-        if (enemigoDummy == null)
+        IntentarAplicarDanioAtaque();
+    }
+
+    public void OnImpactoNormal()
+    {
+        IntentarAplicarDanioAtaque();
+    }
+
+    public void OnImpactoFuerte()
+    {
+        IntentarAplicarDanioAtaque();
+    }
+
+    private void IntentarAplicarDanioAtaque()
+    {
+        if (enemigoDummy == null || impactoAtaqueConsumidoEnEsteSwing)
         {
             return;
         }
 
+        impactoAtaqueConsumidoEnEsteSwing = true;
         enemigoDummy.AplicarDanioAtaqueDesdeAnimacion();
     }
 
@@ -256,6 +281,66 @@ public class ControladorAnimacionEnemigo : MonoBehaviour
     {
         yield return new WaitForSeconds(tiempoRespaldoMuerte);
         NotificarMuerteAnimacionTerminada();
+    }
+
+    private void EstablecerFloatSiExiste(string nombreParametro, float valor)
+    {
+        if (!AnimatorTieneParametro(nombreParametro, AnimatorControllerParameterType.Float))
+        {
+            return;
+        }
+
+        animador.SetFloat(nombreParametro, valor, 0.12f, Time.deltaTime);
+    }
+
+    private void EstablecerBoolSiExiste(string nombreParametro, bool valor)
+    {
+        if (!AnimatorTieneParametro(nombreParametro, AnimatorControllerParameterType.Bool))
+        {
+            return;
+        }
+
+        animador.SetBool(nombreParametro, valor);
+    }
+
+    private void DispararTriggerSiExiste(string nombreTrigger)
+    {
+        if (!AnimatorTieneParametro(nombreTrigger, AnimatorControllerParameterType.Trigger))
+        {
+            return;
+        }
+
+        animador.ResetTrigger(nombreTrigger);
+        animador.SetTrigger(nombreTrigger);
+    }
+
+    private void ResetearTriggerSiExiste(string nombreTrigger)
+    {
+        if (!AnimatorTieneParametro(nombreTrigger, AnimatorControllerParameterType.Trigger))
+        {
+            return;
+        }
+
+        animador.ResetTrigger(nombreTrigger);
+    }
+
+    private bool AnimatorTieneParametro(string nombreParametro, AnimatorControllerParameterType tipoParametro)
+    {
+        if (animador == null)
+        {
+            return false;
+        }
+
+        AnimatorControllerParameter[] parametros = animador.parameters;
+        for (int indiceParametro = 0; indiceParametro < parametros.Length; indiceParametro++)
+        {
+            if (parametros[indiceParametro].name == nombreParametro && parametros[indiceParametro].type == tipoParametro)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // COPILOT-EXPAND:

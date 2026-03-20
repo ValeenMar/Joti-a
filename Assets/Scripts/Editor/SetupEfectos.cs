@@ -39,6 +39,8 @@ public static class SetupEfectos
         EditorUtility.SetDirty(sistemaEfectos);
         EditorUtility.SetDirty(sistemaAudio);
         EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
 
         Selection.activeGameObject = sistemaEfectos.gameObject;
         Debug.Log("Realm Brawl -> Efectos Visuales configurados. Prefabs creados en " + rutaCarpetaEfectos);
@@ -68,14 +70,30 @@ public static class SetupEfectos
         string rutaCompleta = rutaCarpeta + "/" + nombrePrefab + ".prefab";
 
         GameObject prefabExistente = AssetDatabase.LoadAssetAtPath<GameObject>(rutaCompleta);
-        if (prefabExistente != null)
+        bool actualizandoPrefabExistente = prefabExistente != null;
+
+        GameObject objetoTemporal = actualizandoPrefabExistente
+            ? PrefabUtility.LoadPrefabContents(rutaCompleta)
+            : new GameObject(nombrePrefab);
+
+        objetoTemporal.name = nombrePrefab;
+        objetoTemporal.SetActive(false);
+
+        ParticleSystem sistemaParticulas = objetoTemporal.GetComponent<ParticleSystem>();
+        if (sistemaParticulas == null)
         {
-            return prefabExistente;
+            sistemaParticulas = objetoTemporal.AddComponent<ParticleSystem>();
         }
 
-        GameObject objetoTemporal = new GameObject(nombrePrefab);
-        ParticleSystem sistemaParticulas = objetoTemporal.AddComponent<ParticleSystem>();
+        // Frenamos cualquier reproduccion previa para evitar warnings al reconfigurar prefabs existentes.
+        sistemaParticulas.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        sistemaParticulas.Clear(true);
+
         ParticleSystemRenderer rendererParticulas = objetoTemporal.GetComponent<ParticleSystemRenderer>();
+        if (rendererParticulas == null)
+        {
+            rendererParticulas = objetoTemporal.AddComponent<ParticleSystemRenderer>();
+        }
 
         ParticleSystem.MainModule main = sistemaParticulas.main;
         main.loop = nombrePrefab.Contains("Pocion");
@@ -107,19 +125,79 @@ public static class SetupEfectos
 
         main.gravityModifier = nombrePrefab.Contains("Muerte") ? 1.3f : 0f;
         rendererParticulas.renderMode = ParticleSystemRenderMode.Billboard;
+        rendererParticulas.sharedMaterial = ObtenerOCrearMaterialParticulas(rutaCarpeta, nombrePrefab, colorBase, agregarLuz);
+
+        Light luz = objetoTemporal.GetComponent<Light>();
 
         if (agregarLuz)
         {
-            Light luz = objetoTemporal.AddComponent<Light>();
+            if (luz == null)
+            {
+                luz = objetoTemporal.AddComponent<Light>();
+            }
+
             luz.type = LightType.Point;
             luz.range = 3f;
             luz.intensity = 1.5f;
             luz.color = colorBase;
         }
+        else if (luz != null)
+        {
+            Object.DestroyImmediate(luz);
+        }
+
+        objetoTemporal.SetActive(true);
 
         GameObject prefabCreado = PrefabUtility.SaveAsPrefabAsset(objetoTemporal, rutaCompleta);
-        Object.DestroyImmediate(objetoTemporal);
+
+        if (actualizandoPrefabExistente)
+        {
+            PrefabUtility.UnloadPrefabContents(objetoTemporal);
+        }
+        else
+        {
+            Object.DestroyImmediate(objetoTemporal);
+        }
+
         return prefabCreado;
+    }
+
+    // Este metodo obtiene o crea un material de particulas compatible con Built-in Render Pipeline.
+    private static Material ObtenerOCrearMaterialParticulas(string rutaCarpeta, string nombrePrefab, Color colorBase, bool aditivo)
+    {
+        string rutaMaterial = rutaCarpeta + "/" + nombrePrefab + "_Mat.mat";
+        Material materialExistente = AssetDatabase.LoadAssetAtPath<Material>(rutaMaterial);
+        if (materialExistente != null)
+        {
+            return materialExistente;
+        }
+
+        Shader shaderParticulas = Shader.Find(aditivo ? "Legacy Shaders/Particles/Additive" : "Particles/Standard Unlit");
+        if (shaderParticulas == null)
+        {
+            shaderParticulas = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
+        }
+
+        if (shaderParticulas == null)
+        {
+            shaderParticulas = Shader.Find("Sprites/Default");
+        }
+
+        Material nuevoMaterial = new Material(shaderParticulas);
+        nuevoMaterial.name = nombrePrefab + "_Mat";
+
+        if (nuevoMaterial.HasProperty("_Color"))
+        {
+            nuevoMaterial.SetColor("_Color", colorBase);
+        }
+
+        if (nuevoMaterial.HasProperty("_BaseColor"))
+        {
+            nuevoMaterial.SetColor("_BaseColor", colorBase);
+        }
+
+        AssetDatabase.CreateAsset(nuevoMaterial, rutaMaterial);
+        return nuevoMaterial;
     }
 
     // Este metodo busca o crea el sistema de efectos en escena.

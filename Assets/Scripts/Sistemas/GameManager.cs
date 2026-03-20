@@ -128,6 +128,9 @@ public class GameManager : MonoBehaviour
         // Dejamos el cursor en modo juego al comenzar una nueva partida.
         ConfigurarCursorModoJuego();
 
+        // Si ya existe un sistema de audio con musica asignada, le pedimos arrancar el loop ambiental.
+        SistemaAudio.Instancia?.ReproducirMusicaFondo();
+
         // Si la escena no trae controlador de Game Over, lo creamos ahora para no perder la pantalla final.
         AsegurarPantallaGameOverRuntime();
 

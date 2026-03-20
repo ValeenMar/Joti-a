@@ -46,6 +46,38 @@ public class FeedbackCombate : MonoBehaviour
     // Esta variable indica si el enemigo esta resaltado por estar en rango de ataque.
     private bool indicadorRangoActivo;
 
+    // Esta bandera indica si el enemigo esta telegrapheando un ataque.
+    private bool telegraphAtaqueActivo;
+
+    // Esta bandera indica si el enemigo esta vulnerable tras un parry.
+    private bool vulnerableParryActiva;
+
+    // Este color se usa para avisar que el enemigo esta cargando un golpe.
+    [SerializeField] private Color colorTelegraphAtaque = new Color(1f, 0.50f, 0.16f, 1f);
+
+    // Esta intensidad mezcla el telegraph con el color base.
+    [Range(0f, 1f)]
+    [SerializeField] private float intensidadTelegraphAtaque = 0.48f;
+
+    // Este color avisa que el enemigo esta vulnerable despues de un parry.
+    [SerializeField] private Color colorVulnerableParry = new Color(0.36f, 0.90f, 1f, 1f);
+
+    // Esta intensidad mezcla la vulnerabilidad con el color base.
+    [Range(0f, 1f)]
+    [SerializeField] private float intensidadVulnerableParry = 0.42f;
+
+    // Esta opcion crea un disco sencillo en el suelo para leer mejor telegraph y vulnerabilidad.
+    [SerializeField] private bool usarIndicadorSuelo = true;
+
+    // Esta altura separa el disco del suelo para evitar z-fighting.
+    [SerializeField] private float alturaIndicadorSuelo = 0.04f;
+
+    // Esta velocidad da un pulso corto al telegraph de ataque.
+    [SerializeField] private float velocidadPulsoTelegraph = 7f;
+
+    // Esta velocidad da un pulso mas estable al estado vulnerable.
+    [SerializeField] private float velocidadPulsoVulnerable = 4f;
+
     // Esta funcion se ejecuta una vez al activar el objeto.
     private void Awake()
     {
@@ -57,6 +89,16 @@ public class FeedbackCombate : MonoBehaviour
 
         // Capturamos materiales y sus colores base.
         CapturarMateriales();
+
+        // Preparamos un indicador en el suelo para leer mejor estados de combate.
+        AsegurarIndicadorSuelo();
+        AplicarColoresBaseSegunEstado();
+    }
+
+    // Esta funcion actualiza el indicador de suelo y mantiene su escala ajustada al modelo.
+    private void LateUpdate()
+    {
+        ActualizarIndicadorSuelo();
     }
 
     // Esta funcion publica la usa el sistema de combate para disparar el destello.
@@ -88,6 +130,36 @@ public class FeedbackCombate : MonoBehaviour
         indicadorRangoActivo = activo;
 
         // Si ahora mismo no hay un destello golpeando el material, actualizamos el color base visible.
+        if (corrutinaDestelloActiva == null)
+        {
+            AplicarColoresBaseSegunEstado();
+        }
+    }
+
+    // Esta funcion prende o apaga un telegraph visual de ataque.
+    public void EstablecerTelegraphAtaque(bool activo)
+    {
+        if (telegraphAtaqueActivo == activo)
+        {
+            return;
+        }
+
+        telegraphAtaqueActivo = activo;
+        if (corrutinaDestelloActiva == null)
+        {
+            AplicarColoresBaseSegunEstado();
+        }
+    }
+
+    // Esta funcion prende o apaga el estado visual de vulnerabilidad tras un parry.
+    public void EstablecerVulnerableParry(bool activo)
+    {
+        if (vulnerableParryActiva == activo)
+        {
+            return;
+        }
+
+        vulnerableParryActiva = activo;
         if (corrutinaDestelloActiva == null)
         {
             AplicarColoresBaseSegunEstado();
@@ -134,6 +206,61 @@ public class FeedbackCombate : MonoBehaviour
                 // Guardamos su color base para restaurarlo luego.
                 coloresOriginales.Add(LeerColorPrincipal(materialActual));
             }
+        }
+    }
+
+    // Esta funcion crea un disco simple en el suelo para telegraph y estados especiales.
+    private void AsegurarIndicadorSuelo()
+    {
+        if (!usarIndicadorSuelo)
+        {
+            return;
+        }
+
+        Transform existente = transform.Find("IndicadorSueloCombate");
+        if (existente != null)
+        {
+            return;
+        }
+
+        GameObject disco = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        disco.name = "IndicadorSueloCombate";
+        disco.transform.SetParent(transform, false);
+        disco.transform.localRotation = Quaternion.identity;
+        disco.transform.localScale = new Vector3(1.6f, 0.01f, 1.6f);
+
+        Collider colliderDisco = disco.GetComponent<Collider>();
+        if (colliderDisco != null)
+        {
+            if (Application.isPlaying)
+            {
+                Destroy(colliderDisco);
+            }
+            else
+            {
+                DestroyImmediate(colliderDisco);
+            }
+        }
+
+        MeshRenderer rendererDisco = disco.GetComponent<MeshRenderer>();
+        if (rendererDisco != null)
+        {
+            Material materialDisco = new Material(Shader.Find("Standard"));
+            materialDisco.name = "IndicadorSueloCombate_Mat";
+            materialDisco.SetFloat("_Mode", 3f);
+            materialDisco.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            materialDisco.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            materialDisco.SetInt("_ZWrite", 0);
+            materialDisco.DisableKeyword("_ALPHATEST_ON");
+            materialDisco.EnableKeyword("_ALPHABLEND_ON");
+            materialDisco.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            materialDisco.renderQueue = 3000;
+            materialDisco.SetFloat("_Glossiness", 0f);
+            materialDisco.SetFloat("_Metallic", 0f);
+            rendererDisco.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            rendererDisco.receiveShadows = false;
+            rendererDisco.sharedMaterial = materialDisco;
+            rendererDisco.enabled = false;
         }
     }
 
@@ -199,6 +326,18 @@ public class FeedbackCombate : MonoBehaviour
                 colorBase = Color.Lerp(colorBase, colorIndicadorRango, intensidadIndicadorRango);
             }
 
+            // Si el enemigo esta cargando un ataque, el telegraph tiene prioridad visual.
+            if (telegraphAtaqueActivo)
+            {
+                colorBase = Color.Lerp(colorBase, colorTelegraphAtaque, intensidadTelegraphAtaque);
+            }
+
+            // Si esta vulnerable tras parry, lo teñimos de un cian claro para leerlo rapido.
+            if (vulnerableParryActiva)
+            {
+                colorBase = Color.Lerp(colorBase, colorVulnerableParry, intensidadVulnerableParry);
+            }
+
             // Escribimos el color base final en el material.
             EscribirColorPrincipal(materiales[indice], colorBase);
 
@@ -208,6 +347,103 @@ public class FeedbackCombate : MonoBehaviour
                 materiales[indice].SetColor("_EmissionColor", Color.black);
             }
         }
+    }
+
+    // Esta funcion recoloca el disco bajo el enemigo y lo enciende solo cuando hay estados legibles.
+    private void ActualizarIndicadorSuelo()
+    {
+        if (!usarIndicadorSuelo)
+        {
+            return;
+        }
+
+        Transform indicador = transform.Find("IndicadorSueloCombate");
+        if (indicador == null)
+        {
+            return;
+        }
+
+        MeshRenderer rendererIndicador = indicador.GetComponent<MeshRenderer>();
+        if (rendererIndicador == null || rendererIndicador.sharedMaterial == null)
+        {
+            return;
+        }
+
+        Bounds bounds;
+        bool tieneBounds = IntentarCalcularBounds(out bounds);
+        if (!tieneBounds)
+        {
+            rendererIndicador.enabled = false;
+            return;
+        }
+
+        bool mostrar = telegraphAtaqueActivo || vulnerableParryActiva;
+        rendererIndicador.enabled = mostrar;
+        if (!mostrar)
+        {
+            return;
+        }
+
+        float tamanoBase = Mathf.Clamp(Mathf.Max(bounds.size.x, bounds.size.z) * 1.1f, 1.2f, 3.4f);
+        indicador.position = new Vector3(bounds.center.x, bounds.min.y + alturaIndicadorSuelo, bounds.center.z);
+        indicador.rotation = Quaternion.identity;
+        indicador.localScale = new Vector3(tamanoBase, 0.01f, tamanoBase);
+
+        Color colorObjetivo = colorTelegraphAtaque;
+        float alphaBase = 0.28f;
+
+        if (vulnerableParryActiva)
+        {
+            colorObjetivo = colorVulnerableParry;
+            alphaBase = 0.26f;
+        }
+
+        if (telegraphAtaqueActivo)
+        {
+            colorObjetivo = Color.Lerp(colorTelegraphAtaque, Color.white, (Mathf.Sin(Time.time * velocidadPulsoTelegraph) + 1f) * 0.12f);
+            alphaBase = 0.34f + (Mathf.Sin(Time.time * velocidadPulsoTelegraph) + 1f) * 0.08f;
+        }
+        else if (vulnerableParryActiva)
+        {
+            colorObjetivo = Color.Lerp(colorVulnerableParry, Color.white, (Mathf.Sin(Time.time * velocidadPulsoVulnerable) + 1f) * 0.08f);
+            alphaBase = 0.24f + (Mathf.Sin(Time.time * velocidadPulsoVulnerable) + 1f) * 0.05f;
+        }
+
+        Color colorFinal = new Color(colorObjetivo.r, colorObjetivo.g, colorObjetivo.b, alphaBase);
+        rendererIndicador.sharedMaterial.color = colorFinal;
+        if (rendererIndicador.sharedMaterial.HasProperty("_EmissionColor"))
+        {
+            rendererIndicador.sharedMaterial.EnableKeyword("_EMISSION");
+            rendererIndicador.sharedMaterial.SetColor("_EmissionColor", colorFinal * 0.22f);
+        }
+    }
+
+    // Esta funcion calcula bounds visuales del enemigo para posicionar correctamente el disco.
+    private bool IntentarCalcularBounds(out Bounds bounds)
+    {
+        bounds = new Bounds(transform.position, Vector3.zero);
+        bool encontro = false;
+
+        for (int indice = 0; indice < renderizadoresObjetivo.Length; indice++)
+        {
+            Renderer renderizador = renderizadoresObjetivo[indice];
+            if (renderizador == null || !renderizador.enabled)
+            {
+                continue;
+            }
+
+            if (!encontro)
+            {
+                bounds = renderizador.bounds;
+                encontro = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderizador.bounds);
+            }
+        }
+
+        return encontro;
     }
 
     // Esta funcion intenta leer el color principal de un material.

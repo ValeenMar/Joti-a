@@ -9,6 +9,9 @@ public class SistemaRacha : MonoBehaviour
     // Esta posicion define donde aparece el mensaje en pantalla.
     [SerializeField] private Vector2 posicionMensaje = new Vector2(20f, 80f);
 
+    // Esta bandera permite apagar el HUD legacy cuando existe una UI moderna.
+    [SerializeField] private bool mostrarHudOnGui = true;
+
     // Este valor guarda la racha actual.
     [SerializeField] private int rachaActual = 0;
 
@@ -32,6 +35,9 @@ public class SistemaRacha : MonoBehaviour
 
     // Esta propiedad expone la mejor racha registrada.
     public int MejorRacha => mejorRacha;
+
+    // Esta propiedad permite leer si el HUD legacy sigue activo.
+    public bool MostrarHudOnGui => mostrarHudOnGui;
 
     // Esta funcion se ejecuta cuando Unity crea el objeto.
     private void Awake()
@@ -198,6 +204,12 @@ public class SistemaRacha : MonoBehaviour
     // Esta funcion dibuja el mensaje temporal de racha en pantalla.
     private void OnGUI()
     {
+        // Si el HUD legado esta apagado o ya existe la UI moderna, no dibujamos nada.
+        if (!mostrarHudOnGui || UIJugador.HUDPrincipalActivo)
+        {
+            return;
+        }
+
         // Si ya paso el tiempo del mensaje, no dibujamos nada.
         if (Time.unscaledTime >= tiempoFinMensaje)
         {
@@ -221,5 +233,11 @@ public class SistemaRacha : MonoBehaviour
 
         // Restauramos el color anterior de la GUI.
         GUI.color = colorAnterior;
+    }
+
+    // Este metodo permite a la HUD moderna apagar el dibujado legacy sin romper gameplay.
+    public void EstablecerHudOnGuiVisible(bool visible)
+    {
+        mostrarHudOnGui = visible;
     }
 }

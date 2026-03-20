@@ -7,7 +7,7 @@ public class AnclajeCamaraJugador : MonoBehaviour
     [SerializeField] private string nombreAnclaje = "AnclajeCamara";
 
     // Este valor define la posicion local del anclaje respecto del jugador.
-    [SerializeField] private Vector3 desplazamientoLocal = new Vector3(0f, 1.6f, 0f);
+    [SerializeField] private Vector3 desplazamientoLocal = new Vector3(0f, 1.82f, 0f);
 
     // Esta opcion indica si el script puede crear el anclaje automaticamente si no existe.
     [SerializeField] private bool crearAnclajeAutomaticamente = true;
@@ -93,4 +93,3 @@ public class AnclajeCamaraJugador : MonoBehaviour
         return transform;
     }
 }
-

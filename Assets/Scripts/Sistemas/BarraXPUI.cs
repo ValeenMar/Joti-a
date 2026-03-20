@@ -53,6 +53,12 @@ public class BarraXPUI : MonoBehaviour
     // Esta funcion dibuja la barra y los textos en pantalla.
     private void OnGUI()
     {
+        // Si ya existe la UI moderna del jugador, no dibujamos esta barra legacy.
+        if (UIJugador.HUDPrincipalActivo)
+        {
+            return;
+        }
+
         // Si no hay sistema XP disponible, no dibujamos nada.
         if (sistemaXP == null)
         {

@@ -57,6 +57,9 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     // Esta referencia guarda el controlador de animacion del jugador para disparar dano y muerte.
     private ControladorAnimacionJugador controladorAnimacionJugador;
 
+    // Esta referencia apunta al sistema defensivo de parry para consultar primero si el golpe fue desviado.
+    private SistemaDefensaEspada sistemaDefensaEspada;
+
     // Esta variable guarda hasta cuando el jugador sigue protegido contra dano extra.
     private float tiempoFinInvencibilidadDanio;
 
@@ -68,6 +71,9 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
 
     // Esta referencia guarda la corrutina de muerte para no repetir el apagado.
     private Coroutine rutinaMuerteJugador;
+
+    // Esta referencia guarda el Animator visual del jugador como respaldo si falta el puente de animacion.
+    private Animator animatorJugadorRespaldo;
 
     // Esta variable define cuanto esperamos antes de desactivar el jugador al morir.
     [SerializeField] private float tiempoEsperaAntesDeDesactivarMuerte = 1f;
@@ -95,6 +101,12 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
 
         // Buscamos el controlador de animacion del jugador para enlazar dano y muerte.
         controladorAnimacionJugador = GetComponent<ControladorAnimacionJugador>();
+
+        // Buscamos el sistema de defensa del mismo jugador para permitir parry antes de descontar vida.
+        sistemaDefensaEspada = GetComponent<SistemaDefensaEspada>();
+
+        // Buscamos tambien el Animator visual como respaldo por si el puente no esta disponible.
+        animatorJugadorRespaldo = GetComponentInChildren<Animator>(true);
 
         // Intentamos vincular referencias de UI por si ya existe el HUD en escena.
         IntentarVincularUI(true);
@@ -131,6 +143,12 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
 
         // Reintentamos vincular la animacion por si aun no estaba lista en Awake.
         IntentarVincularControladorAnimacion();
+
+        // Reintentamos tambien el sistema defensivo por si se agrego desde un setup de editor tardio.
+        if (sistemaDefensaEspada == null)
+        {
+            sistemaDefensaEspada = GetComponent<SistemaDefensaEspada>();
+        }
 
         // Si faltan referencias, empezamos un ciclo corto de reintentos.
         if (!TieneReferenciasUIValidas())
@@ -207,6 +225,17 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
             return;
         }
 
+        // Si el sistema defensivo existe, primero le damos oportunidad de convertir el golpe en parry.
+        if (sistemaDefensaEspada == null)
+        {
+            sistemaDefensaEspada = GetComponent<SistemaDefensaEspada>();
+        }
+
+        if (sistemaDefensaEspada != null && sistemaDefensaEspada.IntentarResolverParry(datosDanio))
+        {
+            return;
+        }
+
         // Si todavia estamos dentro de la ventana de invencibilidad, ignoramos este golpe.
         if (Time.time < tiempoFinInvencibilidadDanio)
         {
@@ -240,7 +269,7 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
         tiempoFinInvencibilidadDanio = Time.time + duracionInvencibilidadTrasDanio;
 
         // Mostramos en consola el daño recibido y la vida restante para poder depurar bien.
-        Debug.Log("VidaJugador -> dano recibido: " + danioFinal + " | vida actual: " + vidaActual + " / " + vidaMaxima);
+        Debug.Log("[VidaJugador] dano recibido: " + danioFinal + " | vida actual: " + vidaActual + " / " + vidaMaxima);
 
         // Actualizamos la parte visual enseguida para que la UI responda al instante.
         ActualizarVisualBarraVida();
@@ -255,6 +284,11 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
         if (controladorAnimacionJugador != null)
         {
             controladorAnimacionJugador.ReproducirRecibirDanio();
+        }
+        else
+        {
+            // Si no esta el puente, intentamos disparar el trigger directo en el Animator visual.
+            DispararTriggerAnimacionRespaldo(vidaActual <= 0f ? "Die" : "Hit");
         }
 
         // Avisamos al resto del juego que el jugador recibió daño.
@@ -686,7 +720,7 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
     private IEnumerator RutinaMuerteJugador()
     {
         // Mostramos un mensaje simple en consola para esta primera version.
-        Debug.Log("Jugador muerto");
+        Debug.Log("[VidaJugador] Jugador muerto");
 
         // Disparamos la animacion de muerte si existe un controlador.
         IntentarVincularControladorAnimacion();
@@ -695,6 +729,14 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
         {
             controladorAnimacionJugador.ReproducirMorir();
         }
+        else
+        {
+            // Si falta el puente, usamos el trigger directo como respaldo.
+            DispararTriggerAnimacionRespaldo("Die");
+        }
+
+        // Deshabilitamos el movimiento para que no siga tomando input durante la muerte.
+        DeshabilitarMovimientoJugador();
 
         // Avisamos al resto del juego que el jugador murió.
         EventosJuego.NotificarJugadorMurio(gameObject);
@@ -728,6 +770,64 @@ public class VidaJugador : MonoBehaviour, IRecibidorDanio
         if (controladorAnimacionJugador == null)
         {
             controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
+        }
+
+        // Si tambien falta el Animator directo, lo buscamos en hijos como respaldo.
+        if (animatorJugadorRespaldo == null)
+        {
+            animatorJugadorRespaldo = GetComponentInChildren<Animator>(true);
+        }
+    }
+
+    // Este metodo dispara un trigger directo en el Animator visual si existe como respaldo.
+    private void DispararTriggerAnimacionRespaldo(string nombreTrigger)
+    {
+        // Si no tenemos Animator cacheado, lo reintentamos buscar.
+        if (animatorJugadorRespaldo == null)
+        {
+            animatorJugadorRespaldo = GetComponentInChildren<Animator>(true);
+        }
+
+        // Si aun asi no existe, no hacemos nada.
+        if (animatorJugadorRespaldo == null)
+        {
+            return;
+        }
+
+        // Revisamos si el Animator realmente expone ese trigger antes de usarlo.
+        AnimatorControllerParameter[] parametrosAnimator = animatorJugadorRespaldo.parameters;
+        for (int indiceParametro = 0; indiceParametro < parametrosAnimator.Length; indiceParametro++)
+        {
+            if (parametrosAnimator[indiceParametro].type != AnimatorControllerParameterType.Trigger)
+            {
+                continue;
+            }
+
+            if (parametrosAnimator[indiceParametro].name != nombreTrigger)
+            {
+                continue;
+            }
+
+            animatorJugadorRespaldo.ResetTrigger(nombreTrigger);
+            animatorJugadorRespaldo.SetTrigger(nombreTrigger);
+            return;
+        }
+    }
+
+    // Este metodo apaga el movimiento del jugador al morir para que no siga respondiendo a input.
+    private void DeshabilitarMovimientoJugador()
+    {
+        // Intentamos encontrar el script real de movimiento en este objeto o su raiz.
+        MovimientoJugador movimientoJugador = GetComponent<MovimientoJugador>();
+        if (movimientoJugador == null)
+        {
+            movimientoJugador = GetComponentInParent<MovimientoJugador>();
+        }
+
+        // Si existe, lo deshabilitamos.
+        if (movimientoJugador != null)
+        {
+            movimientoJugador.enabled = false;
         }
     }
 

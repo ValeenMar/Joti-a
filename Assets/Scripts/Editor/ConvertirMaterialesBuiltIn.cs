@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.IO;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
@@ -11,6 +13,20 @@ using UnityEngine;
 // Esta clase agrega un menu para convertir de una sola vez todos los materiales de Polytope Studio.
 public static class ConvertirMaterialesBuiltIn
 {
+    // Estas propiedades cubren las texturas base mas comunes que usan los packs Polytope.
+    private static readonly string[] NombresPropiedadTexturaBase =
+    {
+        "_BaseMap",
+        "_MainTex",
+        "_BaseTexture",
+        "_Texture0",
+        "_TextureSample0",
+        "_TextureSample2",
+        "_TextureSample9",
+        "_Exteriorwallstexture",
+        "_Interiorwallstexture"
+    };
+
     // Esta opcion de menu procesa toda la carpeta de Polytope Studio.
     [MenuItem("Realm Brawl/Setup/Convertir Materiales")]
     public static void ConvertirMateriales()
@@ -74,17 +90,27 @@ public static class ConvertirMaterialesBuiltIn
             return false;
         }
 
-        if (!DebeConvertirse(material))
+        if (EsMaterialVariant(rutaMaterial))
+        {
+            Debug.LogWarning("Material omitido (variant de material, requiere conversion manual o del material padre): " + rutaMaterial);
+            return false;
+        }
+
+        bool necesitaReparacionStandard = NecesitaReparacionMaterialStandard(material, rutaMaterial);
+        if (!DebeConvertirse(material) && !necesitaReparacionStandard)
         {
             Debug.Log("Material omitido (ya compatible): " + rutaMaterial);
             return false;
         }
 
-        Texture texturaBase = LeerTextura(material, "_BaseMap", "_MainTex");
+        string nombrePropiedadTexturaBase = string.Empty;
+        Vector2 escalaTexturaBase = Vector2.one;
+        Vector2 offsetTexturaBase = Vector2.zero;
+        Texture texturaBase = LeerTexturaBaseCompatible(material, rutaMaterial, out nombrePropiedadTexturaBase, out escalaTexturaBase, out offsetTexturaBase);
         Color colorBase = LeerColor(material, "_BaseColor", "_Color", Color.white);
         Texture texturaNormal = LeerTextura(material, "_BumpMap");
         Texture texturaEmision = LeerTextura(material, "_EmissionMap");
-        Color colorEmision = LeerColor(material, "_EmissionColor", Color.black);
+        Color colorEmision = LeerColor(material, "_EmissionColor", "_Color", Color.black);
         Texture texturaOcclusion = LeerTextura(material, "_OcclusionMap");
         float cutoff = LeerFloat(material, 0.5f, "_Cutoff", "_AlphaCutoff");
         float metallic = LeerFloat(material, 0f, "_Metallic");
@@ -102,13 +128,15 @@ public static class ConvertirMaterialesBuiltIn
         if (material.HasProperty("_MainTex"))
         {
             material.SetTexture("_MainTex", texturaBase);
-            material.SetTextureScale("_MainTex", Vector2.one);
-            material.SetTextureOffset("_MainTex", Vector2.zero);
+            material.SetTextureScale("_MainTex", escalaTexturaBase);
+            material.SetTextureOffset("_MainTex", offsetTexturaBase);
         }
 
         if (material.HasProperty("_BaseMap"))
         {
             material.SetTexture("_BaseMap", texturaBase);
+            material.SetTextureScale("_BaseMap", escalaTexturaBase);
+            material.SetTextureOffset("_BaseMap", offsetTexturaBase);
         }
 
         if (material.HasProperty("_Color"))
@@ -166,9 +194,20 @@ public static class ConvertirMaterialesBuiltIn
             material.SetFloat("_Smoothness", smoothness);
         }
 
-        ConfigurarModoStandard(material, colorBase.a);
+        if (material.shader != null && material.shader.name == "Standard")
+        {
+            ConfigurarModoStandard(material, colorBase.a);
+        }
 
-        Debug.Log("Material convertido a Built-in: " + rutaMaterial + " -> " + material.shader.name);
+        if (necesitaReparacionStandard && !DebeConvertirse(material))
+        {
+            Debug.Log("Material reparado para Built-in: " + rutaMaterial + " -> " + material.shader.name);
+        }
+        else
+        {
+            Debug.Log("Material convertido a Built-in: " + rutaMaterial + " -> " + material.shader.name);
+        }
+
         EditorUtility.SetDirty(material);
         return true;
     }
@@ -222,18 +261,48 @@ public static class ConvertirMaterialesBuiltIn
         return Shader.Find("Standard");
     }
 
-    private static Texture LeerTextura(Material material, params string[] nombresPropiedad)
+    private static Texture LeerTextura(Material material, out string nombrePropiedadEncontrado, params string[] nombresPropiedad)
     {
+        nombrePropiedadEncontrado = string.Empty;
+
         for (int indice = 0; indice < nombresPropiedad.Length; indice++)
         {
             string nombre = nombresPropiedad[indice];
             if (material.HasProperty(nombre))
             {
+                nombrePropiedadEncontrado = nombre;
                 return material.GetTexture(nombre);
             }
         }
 
         return null;
+    }
+
+    private static Texture LeerTexturaBaseCompatible(Material material, string rutaMaterial, out string nombrePropiedadEncontrado, out Vector2 escalaTextura, out Vector2 offsetTextura)
+    {
+        nombrePropiedadEncontrado = string.Empty;
+        escalaTextura = Vector2.one;
+        offsetTextura = Vector2.zero;
+
+        Texture texturaDesdeShader = LeerTextura(material, out nombrePropiedadEncontrado, NombresPropiedadTexturaBase);
+        if (texturaDesdeShader != null)
+        {
+            if (material.HasProperty(nombrePropiedadEncontrado))
+            {
+                escalaTextura = material.GetTextureScale(nombrePropiedadEncontrado);
+                offsetTextura = material.GetTextureOffset(nombrePropiedadEncontrado);
+            }
+
+            return texturaDesdeShader;
+        }
+
+        return LeerTexturaDesdeArchivoMaterial(rutaMaterial, out nombrePropiedadEncontrado, out escalaTextura, out offsetTextura, NombresPropiedadTexturaBase);
+    }
+
+    private static Texture LeerTextura(Material material, params string[] nombresPropiedad)
+    {
+        string nombreIgnorado;
+        return LeerTextura(material, out nombreIgnorado, nombresPropiedad);
     }
 
     private static Color LeerColor(Material material, string nombrePrimario, string nombreSecundario, Color colorPorDefecto)
@@ -265,6 +334,170 @@ public static class ConvertirMaterialesBuiltIn
         return valorPorDefecto;
     }
 
+    private static void CopiarEscalaYDesplazamientoTextura(Material material, string propiedadOrigen, string propiedadDestino)
+    {
+        if (material == null || string.IsNullOrEmpty(propiedadOrigen) || string.IsNullOrEmpty(propiedadDestino))
+        {
+            return;
+        }
+
+        if (!material.HasProperty(propiedadOrigen) || !material.HasProperty(propiedadDestino))
+        {
+            return;
+        }
+
+        material.SetTextureScale(propiedadDestino, material.GetTextureScale(propiedadOrigen));
+        material.SetTextureOffset(propiedadDestino, material.GetTextureOffset(propiedadOrigen));
+    }
+
+    private static bool NecesitaReparacionMaterialStandard(Material material, string rutaMaterial)
+    {
+        if (material == null || material.shader == null)
+        {
+            return false;
+        }
+
+        if (material.shader.name != "Standard")
+        {
+            return false;
+        }
+
+        if (material.mainTexture != null)
+        {
+            return false;
+        }
+
+        string nombrePropiedad;
+        Vector2 escala;
+        Vector2 offset;
+        Texture texturaRecuperada = LeerTexturaDesdeArchivoMaterial(rutaMaterial, out nombrePropiedad, out escala, out offset, NombresPropiedadTexturaBase);
+        return texturaRecuperada != null;
+    }
+
+    private static Texture LeerTexturaDesdeArchivoMaterial(string rutaMaterial, out string nombrePropiedadEncontrado, out Vector2 escalaTextura, out Vector2 offsetTextura, params string[] nombresPropiedad)
+    {
+        nombrePropiedadEncontrado = string.Empty;
+        escalaTextura = Vector2.one;
+        offsetTextura = Vector2.zero;
+
+        if (string.IsNullOrEmpty(rutaMaterial) || !File.Exists(rutaMaterial))
+        {
+            return null;
+        }
+
+        string[] lineas = File.ReadAllLines(rutaMaterial);
+        for (int indiceNombre = 0; indiceNombre < nombresPropiedad.Length; indiceNombre++)
+        {
+            string nombrePropiedad = nombresPropiedad[indiceNombre];
+            Texture texturaEncontrada = BuscarTexturaEnLineas(lineas, nombrePropiedad, out escalaTextura, out offsetTextura);
+            if (texturaEncontrada != null)
+            {
+                nombrePropiedadEncontrado = nombrePropiedad;
+                return texturaEncontrada;
+            }
+        }
+
+        return null;
+    }
+
+    private static Texture BuscarTexturaEnLineas(string[] lineas, string nombrePropiedad, out Vector2 escalaTextura, out Vector2 offsetTextura)
+    {
+        escalaTextura = Vector2.one;
+        offsetTextura = Vector2.zero;
+
+        if (lineas == null || lineas.Length == 0 || string.IsNullOrEmpty(nombrePropiedad))
+        {
+            return null;
+        }
+
+        for (int indiceLinea = 0; indiceLinea < lineas.Length; indiceLinea++)
+        {
+            string lineaActual = lineas[indiceLinea]?.Trim();
+            if (lineaActual != "- " + nombrePropiedad + ":")
+            {
+                continue;
+            }
+
+            string guidTextura = string.Empty;
+
+            for (int indiceBloque = indiceLinea + 1; indiceBloque < lineas.Length; indiceBloque++)
+            {
+                string lineaBloque = lineas[indiceBloque]?.Trim();
+                if (string.IsNullOrEmpty(lineaBloque))
+                {
+                    continue;
+                }
+
+                if (lineaBloque.StartsWith("- "))
+                {
+                    break;
+                }
+
+                if (lineaBloque.StartsWith("m_Texture:"))
+                {
+                    guidTextura = ExtraerGuid(lineaBloque);
+                }
+                else if (lineaBloque.StartsWith("m_Scale:"))
+                {
+                    escalaTextura = ExtraerVector2(lineaBloque, Vector2.one);
+                }
+                else if (lineaBloque.StartsWith("m_Offset:"))
+                {
+                    offsetTextura = ExtraerVector2(lineaBloque, Vector2.zero);
+                }
+            }
+
+            if (string.IsNullOrEmpty(guidTextura))
+            {
+                return null;
+            }
+
+            string rutaTextura = AssetDatabase.GUIDToAssetPath(guidTextura);
+            if (string.IsNullOrEmpty(rutaTextura))
+            {
+                return null;
+            }
+
+            return AssetDatabase.LoadAssetAtPath<Texture>(rutaTextura);
+        }
+
+        return null;
+    }
+
+    private static string ExtraerGuid(string linea)
+    {
+        Match match = Regex.Match(linea, @"guid:\s*([a-fA-F0-9]+)");
+        if (!match.Success)
+        {
+            return string.Empty;
+        }
+
+        return match.Groups[1].Value;
+    }
+
+    private static Vector2 ExtraerVector2(string linea, Vector2 valorPorDefecto)
+    {
+        Match match = Regex.Match(linea, @"x:\s*([-+]?[0-9]*\.?[0-9]+),\s*y:\s*([-+]?[0-9]*\.?[0-9]+)");
+        if (!match.Success)
+        {
+            return valorPorDefecto;
+        }
+
+        float x;
+        float y;
+        if (!float.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out x))
+        {
+            x = valorPorDefecto.x;
+        }
+
+        if (!float.TryParse(match.Groups[2].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out y))
+        {
+            y = valorPorDefecto.y;
+        }
+
+        return new Vector2(x, y);
+    }
+
     private static void ConfigurarModoStandard(Material material, float alphaBase)
     {
         bool esTransparente = alphaBase < 0.99f ||
@@ -286,5 +519,35 @@ public static class ConvertirMaterialesBuiltIn
         material.EnableKeyword("_ALPHABLEND_ON");
         material.DisableKeyword("_ALPHATEST_ON");
         material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+    }
+
+    private static bool EsMaterialVariant(string rutaMaterial)
+    {
+        if (string.IsNullOrEmpty(rutaMaterial) || !File.Exists(rutaMaterial))
+        {
+            return false;
+        }
+
+        using (StreamReader lector = new StreamReader(rutaMaterial))
+        {
+            while (!lector.EndOfStream)
+            {
+                string linea = lector.ReadLine();
+                if (string.IsNullOrEmpty(linea))
+                {
+                    continue;
+                }
+
+                string lineaSinEspacios = linea.Trim();
+                if (!lineaSinEspacios.StartsWith("m_Parent:"))
+                {
+                    continue;
+                }
+
+                return !lineaSinEspacios.Contains("{fileID: 0}");
+            }
+        }
+
+        return false;
     }
 }

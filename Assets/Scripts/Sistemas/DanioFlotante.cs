@@ -25,6 +25,9 @@ public class DanioFlotante : MonoBehaviour
     // Este color se usa para golpes criticos.
     [SerializeField] private Color colorDanioCritico = new Color(1f, 0.85f, 0.2f);
 
+    // Este color se usa para los golpes de espalda.
+    [SerializeField] private Color colorDanioEspalda = new Color(1f, 0.55f, 0.18f, 1f);
+
     // Este tamano de fuente se usa para danio normal.
     [SerializeField] private int tamanoFuenteNormal = 48;
 
@@ -78,7 +81,7 @@ public class DanioFlotante : MonoBehaviour
         TextMesh texto = objetoDanio.AddComponent<TextMesh>();
 
         // Mostramos el valor de danio redondeado.
-        texto.text = Mathf.RoundToInt(datosDanio.DanioFinalCalculado).ToString();
+        texto.text = ConstruirTextoDanio(datosDanio);
 
         // Centramos el ancla para mejor lectura.
         texto.anchor = TextAnchor.MiddleCenter;
@@ -87,10 +90,10 @@ public class DanioFlotante : MonoBehaviour
         texto.alignment = TextAlignment.Center;
 
         // Si fue critico usamos tamano mayor, si no usamos normal.
-        texto.fontSize = datosDanio.FueCritico ? tamanoFuenteCritico : tamanoFuenteNormal;
+        texto.fontSize = ObtenerTamanoFuente(datosDanio);
 
         // Si fue critico usamos color dorado, si no blanco.
-        texto.color = datosDanio.FueCritico ? colorDanioCritico : colorDanioNormal;
+        texto.color = ObtenerColorDanio(datosDanio);
 
         // Ajustamos el tamano en mundo para que no quede gigante.
         texto.characterSize = 0.05f;
@@ -155,5 +158,65 @@ public class DanioFlotante : MonoBehaviour
             // Eliminamos el GameObject del texto flotante.
             Destroy(transformDanio.gameObject);
         }
+    }
+
+    // Este metodo arma un texto mas informativo segun la zona golpeada.
+    private string ConstruirTextoDanio(DatosDanio datosDanio)
+    {
+        // Arrancamos con el valor del dano redondeado.
+        string valorDanio = Mathf.RoundToInt(datosDanio.DanioFinalCalculado).ToString();
+
+        // Si fue cabeza, lo marcamos explicitamente.
+        if (datosDanio.tipoZona == TipoZonaDanio.Cabeza)
+        {
+            return valorDanio + " CABEZA";
+        }
+
+        // Si fue espalda, tambien lo contamos.
+        if (datosDanio.tipoZona == TipoZonaDanio.Espalda)
+        {
+            return valorDanio + " ESPALDA";
+        }
+
+        // Para cuerpo dejamos solo el numero para no ensuciar demasiado.
+        return valorDanio;
+    }
+
+    // Este metodo elige el color segun el tipo de impacto.
+    private Color ObtenerColorDanio(DatosDanio datosDanio)
+    {
+        // Cabeza usa el color critico.
+        if (datosDanio.tipoZona == TipoZonaDanio.Cabeza)
+        {
+            return colorDanioCritico;
+        }
+
+        // Espalda usa un naranja distinto.
+        if (datosDanio.tipoZona == TipoZonaDanio.Espalda)
+        {
+            return colorDanioEspalda;
+        }
+
+        // Cuerpo queda blanco.
+        return colorDanioNormal;
+    }
+
+    // Este metodo define el tamano de fuente segun la importancia de la zona.
+    private int ObtenerTamanoFuente(DatosDanio datosDanio)
+    {
+        // Cabeza resalta mas.
+        if (datosDanio.tipoZona == TipoZonaDanio.Cabeza)
+        {
+            return tamanoFuenteCritico;
+        }
+
+        // Espalda queda a mitad de camino entre normal y critico.
+        if (datosDanio.tipoZona == TipoZonaDanio.Espalda)
+        {
+            return Mathf.RoundToInt(Mathf.Lerp(tamanoFuenteNormal, tamanoFuenteCritico, 0.45f));
+        }
+
+        // Cuerpo queda normal.
+        return tamanoFuenteNormal;
     }
 }

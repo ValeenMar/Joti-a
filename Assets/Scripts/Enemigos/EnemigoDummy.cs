@@ -77,12 +77,30 @@ public class EnemigoDummy : MonoBehaviour
     // Este retraso se usa solo como respaldo si el Animation Event no dispara el dano.
     [SerializeField] private float delayImpactoAtaque = 0.35f;
 
+    // Este tiempo define cuanto dura el telegraph visual antes de lanzar el golpe real.
+    [SerializeField] private float duracionTelegraphAtaque = 0.24f;
+
     // Este tiempo define cuanto tarda en caer antes de desaparecer.
     [Header("Muerte")]
     [SerializeField] private float duracionCaida = 0.35f;
 
     // Este tiempo define cuando se destruye el enemigo muerto.
     [SerializeField] private float tiempoDesaparecer = 3f;
+
+    // Esta bandera evita iniciar dos secuencias de muerte al mismo tiempo.
+    private bool muerteEnCurso;
+
+    // Esta bandera marca si la animacion de muerte ya termino por evento o respaldo.
+    private bool muerteAnimacionTerminada;
+
+    // Este tiempo guarda hasta cuando el enemigo queda aturdido por un parry.
+    private float tiempoFinAturdimientoParry;
+
+    // Este tiempo guarda hasta cuando sigue activa la vulnerabilidad extra del parry.
+    private float tiempoFinVulnerabilidadParry;
+
+    // Este valor guarda el multiplicador adicional del proximo golpe tras un parry exitoso.
+    private float multiplicadorVulnerabilidadParry = 1f;
 
     // Referencia al componente de navegacion.
     private NavMeshAgent agenteNavMesh;
@@ -120,6 +138,9 @@ public class EnemigoDummy : MonoBehaviour
     // Guarda la referencia al controlador visual del modelo esqueleto.
     [SerializeField] private ControladorAnimacionEnemigo controladorAnimacionEnemigo;
 
+    // Esta referencia apunta al feedback visual para telegraphs y estados especiales.
+    [SerializeField] private FeedbackCombate feedbackCombate;
+
     // Esta bandera marca si el dano del ataque ya se aplico por evento.
     private bool danioAtaqueAplicado;
 
@@ -149,6 +170,9 @@ public class EnemigoDummy : MonoBehaviour
 
     // Esta propiedad expone el estado actual para el controlador de animacion.
     public EstadosEnemigo EstadoActual => estadoActual;
+
+    // Esta propiedad deja consultar si el enemigo esta temporalmente aturdido por un parry.
+    public bool EstaAturdidoPorParry => Time.time < tiempoFinAturdimientoParry;
 
     // Esta funcion se ejecuta al iniciar el objeto.
     private void Awake()
@@ -186,7 +210,12 @@ public class EnemigoDummy : MonoBehaviour
     private void OnDisable()
     {
         // Dejamos de escuchar el evento para evitar referencias colgadas.
-        vidaEnemigo.AlMorir -= ManejarMuerteEnemigo;
+        if (vidaEnemigo != null)
+        {
+            vidaEnemigo.AlMorir -= ManejarMuerteEnemigo;
+        }
+
+        DesvincularEventoMuerteAnimacion();
 
         // Si hay una inicializacion en curso, la detenemos para no dejar corrutinas colgadas.
         if (rutinaInicializacionIA != null)
@@ -239,6 +268,27 @@ public class EnemigoDummy : MonoBehaviour
             return;
         }
 
+        // Si esta aturdido por un parry, frenamos movimiento y esperamos a que termine.
+        if (EstaAturdidoPorParry)
+        {
+            if (agenteNavMesh != null && agenteNavMesh.enabled)
+            {
+                agenteNavMesh.isStopped = true;
+            }
+
+            if (feedbackCombate != null)
+            {
+                feedbackCombate.EstablecerTelegraphAtaque(false);
+            }
+
+            return;
+        }
+
+        if (feedbackCombate != null && Time.time > tiempoFinVulnerabilidadParry)
+        {
+            feedbackCombate.EstablecerVulnerableParry(false);
+        }
+
         // Si el agente se desengancho del NavMesh tras un reload, intentamos recuperarlo.
         if (agenteNavMesh != null && agenteNavMesh.enabled && !agenteNavMesh.isOnNavMesh)
         {
@@ -279,11 +329,21 @@ public class EnemigoDummy : MonoBehaviour
         // Si ya tenemos referencia, no repetimos la busqueda.
         if (controladorAnimacionEnemigo != null)
         {
+            if (feedbackCombate == null)
+            {
+                feedbackCombate = controladorAnimacionEnemigo.GetComponentInParent<FeedbackCombate>();
+            }
+
             return;
         }
 
         // Buscamos el controlador en hijos, incluyendo objetos inactivos.
         controladorAnimacionEnemigo = GetComponentInChildren<ControladorAnimacionEnemigo>(true);
+
+        if (feedbackCombate == null)
+        {
+            feedbackCombate = GetComponentInChildren<FeedbackCombate>(true);
+        }
     }
 
     // Este metodo intenta localizar un jugador con VidaJugador en la escena.
@@ -609,11 +669,23 @@ public class EnemigoDummy : MonoBehaviour
         ataqueEnCurso = true;
         danioAtaqueAplicado = false;
 
+        if (feedbackCombate != null)
+        {
+            feedbackCombate.EstablecerTelegraphAtaque(true);
+        }
+
+        yield return new WaitForSeconds(Mathf.Max(0.05f, duracionTelegraphAtaque));
+
         // Reproducimos la animacion de ataque desde el controlador visual.
         BuscarControladorAnimacion();
         if (controladorAnimacionEnemigo != null)
         {
             controladorAnimacionEnemigo.ReproducirAtacar();
+        }
+
+        if (feedbackCombate != null)
+        {
+            feedbackCombate.EstablecerTelegraphAtaque(false);
         }
 
         // En Mirror, desde aqui deberia lanzarse un [Command] al servidor.
@@ -679,6 +751,11 @@ public class EnemigoDummy : MonoBehaviour
         // Apagamos la bandera de ataque activo.
         ataqueEnCurso = false;
 
+        if (feedbackCombate != null)
+        {
+            feedbackCombate.EstablecerTelegraphAtaque(false);
+        }
+
         // Si habia una corrutina de respaldo, la detenemos.
         if (rutinaAtaqueRespaldoActiva != null)
         {
@@ -713,11 +790,118 @@ public class EnemigoDummy : MonoBehaviour
         vidaJugadorObjetivo.RecibirDanio(datosDanio);
     }
 
+    // Este metodo permite escalar el dano del enemigo segun la oleada sin romper su logica interna.
+    public void AplicarEscaladoOleada(float multiplicadorDanio)
+    {
+        // Aseguramos un multiplicador valido para no generar valores raros.
+        float multiplicadorSeguro = Mathf.Max(0.01f, multiplicadorDanio);
+
+        // Escalamos el dano base del ataque en el lugar donde la IA ya lo usa.
+        danioAtaque = Mathf.Max(1f, danioAtaque * multiplicadorSeguro);
+    }
+
+    // Este metodo aturde al enemigo despues de recibir un parry exitoso del jugador.
+    public void AplicarAturdimientoParry(float duracion)
+    {
+        // Si el enemigo ya murio, no tiene sentido aturdirlo.
+        if (!vidaEnemigo.EstaVivo)
+        {
+            return;
+        }
+
+        // Extendemos la ventana de aturdimiento al tiempo mas largo recibido.
+        tiempoFinAturdimientoParry = Mathf.Max(tiempoFinAturdimientoParry, Time.time + Mathf.Max(0.05f, duracion));
+
+        // Cancelamos cualquier ataque actual y frenamos el agente.
+        FinalizarAtaque();
+        danioAtaqueAplicado = false;
+        if (agenteNavMesh != null && agenteNavMesh.enabled)
+        {
+            agenteNavMesh.isStopped = true;
+        }
+
+        // Cambiamos el estado para que la IA no intente continuar una transicion vieja.
+        estadoActual = EstadosEnemigo.Perseguir;
+
+        if (feedbackCombate != null)
+        {
+            feedbackCombate.EstablecerTelegraphAtaque(false);
+        }
+
+        // Si hay controlador visual, usamos la reaccion de golpe como telegraph del parry recibido.
+        BuscarControladorAnimacion();
+        if (controladorAnimacionEnemigo != null)
+        {
+            controladorAnimacionEnemigo.ReproducirRecibirDanio(new DatosDanio
+            {
+                atacante = null,
+                objetivo = gameObject,
+                danioBase = 0f,
+                multiplicadorZona = 1f,
+                tipoZona = TipoZonaDanio.Cuerpo,
+                puntoImpacto = transform.position + Vector3.up,
+                direccionImpacto = -transform.forward,
+                esGolpeFuerte = false
+            });
+        }
+    }
+
+    // Este metodo marca al enemigo como vulnerable para el siguiente contraataque del jugador.
+    public void MarcarVulnerablePorParry(float duracion, float multiplicador)
+    {
+        // Guardamos una ventana de vulnerabilidad que dura un tiempo corto despues del parry.
+        tiempoFinVulnerabilidadParry = Mathf.Max(tiempoFinVulnerabilidadParry, Time.time + Mathf.Max(0.05f, duracion));
+        multiplicadorVulnerabilidadParry = Mathf.Max(1f, multiplicador);
+
+        if (feedbackCombate != null)
+        {
+            feedbackCombate.EstablecerVulnerableParry(true);
+        }
+    }
+
+    // Este metodo devuelve y consume el multiplicador adicional del proximo golpe tras un parry.
+    public float ConsumirMultiplicadorVulnerabilidadParry()
+    {
+        // Si ya expiro la ventana, devolvemos multiplicador normal.
+        if (Time.time > tiempoFinVulnerabilidadParry)
+        {
+            multiplicadorVulnerabilidadParry = 1f;
+            if (feedbackCombate != null)
+            {
+                feedbackCombate.EstablecerVulnerableParry(false);
+            }
+            return 1f;
+        }
+
+        // Consumimos el bonus una sola vez para que el contraataque sea claro y no permanente.
+        float multiplicador = Mathf.Max(1f, multiplicadorVulnerabilidadParry);
+        tiempoFinVulnerabilidadParry = -1f;
+        multiplicadorVulnerabilidadParry = 1f;
+        if (feedbackCombate != null)
+        {
+            feedbackCombate.EstablecerVulnerableParry(false);
+        }
+        return multiplicador;
+    }
+
     // Este metodo responde al evento de muerte de VidaEnemigo.
     private void ManejarMuerteEnemigo(DatosDanio datosDanio)
     {
+        if (muerteEnCurso)
+        {
+            return;
+        }
+
         // Cambiamos estado interno a muerto.
         estadoActual = EstadosEnemigo.Muerto;
+        muerteEnCurso = true;
+        muerteAnimacionTerminada = false;
+
+        if (feedbackCombate != null)
+        {
+            feedbackCombate.EstablecerTelegraphAtaque(false);
+            feedbackCombate.EstablecerVulnerableParry(false);
+        }
 
         // Cortamos cualquier ataque que estuviera a medias.
         FinalizarAtaque();
@@ -727,12 +911,27 @@ public class EnemigoDummy : MonoBehaviour
         if (agenteNavMesh != null && agenteNavMesh.enabled)
         {
             agenteNavMesh.isStopped = true;
+            agenteNavMesh.ResetPath();
+            agenteNavMesh.enabled = false;
         }
 
-        // Si ya habia una rutina de muerte, no iniciamos otra.
+        Rigidbody cuerpoRigido = GetComponent<Rigidbody>();
+        if (cuerpoRigido != null)
+        {
+            cuerpoRigido.velocity = Vector3.zero;
+            cuerpoRigido.angularVelocity = Vector3.zero;
+            cuerpoRigido.isKinematic = true;
+        }
+
+        DesactivarCollidersGameplay();
+
+        BuscarControladorAnimacion();
+        VincularEventoMuerteAnimacion();
+
         if (rutinaMuerteActiva != null)
         {
-            return;
+            StopCoroutine(rutinaMuerteActiva);
+            rutinaMuerteActiva = null;
         }
 
         // Iniciamos secuencia visual de caida y desaparicion.
@@ -742,23 +941,110 @@ public class EnemigoDummy : MonoBehaviour
     // Esta corutina limpia el cuerpo muerto y luego destruye el objeto.
     private IEnumerator RutinaMuerte()
     {
-        // Desactivamos colliders para evitar choques raros tras morir.
-        Collider[] colliders = GetComponentsInChildren<Collider>();
+        // Esperamos un instante breve para que el cuerpo quede estabilizado antes de alinearlo.
+        yield return new WaitForEndOfFrame();
 
-        // Recorremos todos los colliders encontrados.
-        for (int i = 0; i < colliders.Length; i++)
+        // Bajamos el cuerpo al suelo antes de disparar la animacion de muerte.
+        yield return StartCoroutine(AlinearAlSuelo(Mathf.Max(0.05f, duracionCaida)));
+
+        // Reproducimos la animacion de muerte desde el controlador visual.
+        if (controladorAnimacionEnemigo != null)
         {
-            colliders[i].enabled = false;
+            controladorAnimacionEnemigo.ReproducirMorir();
+        }
+        else
+        {
+            Debug.LogWarning("[EnemigoDummy] No se encontro ControladorAnimacionEnemigo para reproducir la muerte.");
         }
 
-        // Esperamos el tiempo configurado antes de destruir.
-        yield return new WaitForSeconds(tiempoDesaparecer);
+        // Esperamos a que la animacion notifique su fin o a que venza el respaldo.
+        float tiempoLimite = Mathf.Max(0.5f, tiempoDesaparecer);
+        float tiempoInicio = Time.time;
+
+        while (!muerteAnimacionTerminada && Time.time - tiempoInicio < tiempoLimite)
+        {
+            yield return null;
+        }
+
+        if (!muerteAnimacionTerminada)
+        {
+            Debug.LogWarning("[EnemigoDummy] La animacion de muerte no notifico a tiempo; aplicando respaldo de destruccion.");
+        }
+
+        DesvincularEventoMuerteAnimacion();
 
         // En Mirror, aqui la destruccion deberia replicarse desde servidor con [ClientRpc].
         // [Mirror futuro] La destruccion de red debe pasar por autoridad de servidor.
 
         // Destruimos el objeto enemigo de la escena.
         Destroy(gameObject);
+    }
+
+    // Esta corrutina alinea el enemigo al suelo usando un raycast simple.
+    private IEnumerator AlinearAlSuelo(float duracion)
+    {
+        Vector3 posicionInicial = transform.position;
+        float alturaObjetivo = posicionInicial.y;
+
+        if (Physics.Raycast(posicionInicial + Vector3.up * 0.5f, Vector3.down, out RaycastHit hit, 5f))
+        {
+            alturaObjetivo = hit.point.y;
+        }
+
+        Vector3 posicionFinal = new Vector3(posicionInicial.x, alturaObjetivo, posicionInicial.z);
+        float tiempo = 0f;
+
+        while (tiempo < duracion)
+        {
+            tiempo += Time.deltaTime;
+            float progreso = duracion <= 0.0001f ? 1f : Mathf.Clamp01(tiempo / duracion);
+            transform.position = Vector3.Lerp(posicionInicial, posicionFinal, progreso);
+            yield return null;
+        }
+
+        transform.position = posicionFinal;
+    }
+
+    // Esta funcion desactiva los colliders de gameplay sin tocar otros componentes innecesarios.
+    private void DesactivarCollidersGameplay()
+    {
+        Collider[] colliders = GetComponentsInChildren<Collider>(true);
+        for (int indiceCollider = 0; indiceCollider < colliders.Length; indiceCollider++)
+        {
+            if (colliders[indiceCollider] != null)
+            {
+                colliders[indiceCollider].enabled = false;
+            }
+        }
+    }
+
+    // Esta funcion suscribe el evento del controlador visual para saber cuando termino la muerte.
+    private void VincularEventoMuerteAnimacion()
+    {
+        if (controladorAnimacionEnemigo == null)
+        {
+            return;
+        }
+
+        controladorAnimacionEnemigo.OnMuerteAnimacionTerminada -= ManejarFinMuerteAnimacion;
+        controladorAnimacionEnemigo.OnMuerteAnimacionTerminada += ManejarFinMuerteAnimacion;
+    }
+
+    // Esta funcion desuscribe el evento del controlador visual de forma segura.
+    private void DesvincularEventoMuerteAnimacion()
+    {
+        if (controladorAnimacionEnemigo == null)
+        {
+            return;
+        }
+
+        controladorAnimacionEnemigo.OnMuerteAnimacionTerminada -= ManejarFinMuerteAnimacion;
+    }
+
+    // Esta funcion marca que la animacion de muerte ya termino.
+    private void ManejarFinMuerteAnimacion()
+    {
+        muerteAnimacionTerminada = true;
     }
 
     // Este metodo rota al enemigo para mirar al objetivo en plano horizontal.

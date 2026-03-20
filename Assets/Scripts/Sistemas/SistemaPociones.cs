@@ -37,6 +37,9 @@ public class SistemaPociones : MonoBehaviour
     // Esta posicion define donde se dibuja el HUD de pociones.
     [SerializeField] private Vector2 posicionHud = new Vector2(20f, 100f);
 
+    // Esta bandera permite apagar el HUD OnGUI cuando la UI principal usa Canvas.
+    [SerializeField] private bool mostrarHudOnGui = true;
+
     // Este color se usa cuando aun quedan pociones.
     [SerializeField] private Color colorHudNormal = Color.white;
 
@@ -63,6 +66,9 @@ public class SistemaPociones : MonoBehaviour
 
     // Esta propiedad expone cuantas pociones como maximo se pueden guardar.
     public int CantidadMaximaPociones => cantidadMaximaPociones;
+
+    // Esta propiedad expone si el HUD legacy de OnGUI sigue visible.
+    public bool MostrarHudOnGui => mostrarHudOnGui;
 
     // Esta funcion se ejecuta al iniciar el componente.
     private void Awake()
@@ -263,6 +269,18 @@ public class SistemaPociones : MonoBehaviour
     // Esta funcion dibuja un HUD simple de pociones sin necesitar armar UI manual.
     private void OnGUI()
     {
+        // Si ya existe la UI moderna del jugador, no dibujamos el HUD legacy.
+        if (UIJugador.HUDPrincipalActivo)
+        {
+            return;
+        }
+
+        // Si el HUD viejo esta desactivado, no dibujamos nada.
+        if (!mostrarHudOnGui)
+        {
+            return;
+        }
+
         // Si no existe vida jugador, no dibujamos el HUD.
         if (vidaJugador == null)
         {
@@ -303,6 +321,13 @@ public class SistemaPociones : MonoBehaviour
 
         // Restauramos el color anterior del GUI.
         GUI.color = colorAnterior;
+    }
+
+    // Este metodo permite a un setup externo apagar o prender el HUD viejo sin tocar gameplay.
+    public void EstablecerHudOnGuiVisible(bool visible)
+    {
+        // Guardamos el nuevo estado del HUD de debug/legacy.
+        mostrarHudOnGui = visible;
     }
 
     // COPILOT-EXPAND: Aqui podes agregar pickups de pociones, distintas calidades y curacion gradual en el tiempo.

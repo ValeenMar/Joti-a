@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using UnityEngine;
 
 // Esta clase administra la vida del enemigo y coordina su muerte con la animacion.
@@ -16,6 +17,12 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
     // Esta variable publica te deja arrastrar desde el Inspector el prefab de la orbe de experiencia.
     public GameObject prefabOrbeExperiencia;
 
+    // Esta variable define cuanto dura el flash blanco al recibir dano.
+    [SerializeField] private float duracionFlashBlanco = 0.08f;
+
+    // Este color se usa para el flash momentaneo al recibir impacto.
+    [SerializeField] private Color colorFlashBlanco = Color.white;
+
     // Esta referencia guarda el controlador visual del esqueleto.
     [SerializeField] private ControladorAnimacionEnemigo controladorAnimacionEnemigo;
 
@@ -24,6 +31,18 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
 
     // Esta variable evita completar la muerte mas de una vez.
     private bool muerteProcesada;
+
+    // Estas referencias guardan los renderers visuales para poder hacer flash sin perder los materiales originales.
+    private Renderer[] renderizadoresVisuales;
+
+    // Esta estructura guarda los materiales originales de cada renderer.
+    private Material[][] materialesOriginales;
+
+    // Esta estructura guarda los colores originales de cada material.
+    private Color[][] coloresOriginales;
+
+    // Esta referencia guarda la corrutina activa del flash blanco.
+    private Coroutine rutinaFlashBlanco;
 
     // Esta referencia guarda una posible finalizacion de respaldo si falta el evento de animacion.
     private Coroutine rutinaMuerteFallback;
@@ -55,6 +74,7 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
         estaMuerto = false;
         muerteProcesada = false;
         BuscarYConectarControladorAnimacion();
+        CapturarMaterialesVisuales();
     }
 
     private void OnEnable()
@@ -70,6 +90,15 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
     private void OnDisable()
     {
         DesconectarControladorAnimacion();
+
+        if (rutinaFlashBlanco != null)
+        {
+            StopCoroutine(rutinaFlashBlanco);
+            rutinaFlashBlanco = null;
+        }
+
+        // Si dejamos el objeto a mitad de flash, restauramos los colores originales.
+        RestaurarMaterialesVisuales();
 
         if (rutinaMuerteFallback != null)
         {
@@ -160,6 +189,9 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
             return;
         }
 
+        // Reproducimos un flash blanco breve para reforzar el impacto.
+        IniciarFlashBlanco();
+
         // Si sigue vivo, reproducimos el golpe visual de retroceso.
         if (controladorAnimacionEnemigo != null)
         {
@@ -191,6 +223,208 @@ public class VidaEnemigo : MonoBehaviour, IRecibidorDanio
             }
 
             rutinaMuerteFallback = StartCoroutine(RutinaMuerteFallback());
+        }
+    }
+
+    // Este metodo permite escalar la vida del enemigo segun la oleada sin tocar otros sistemas.
+    public void AplicarEscaladoOleada(float multiplicadorVida, int experienciaExtra = 0)
+    {
+        // Aseguramos multiplicadores validos.
+        float multiplicadorSeguro = Mathf.Max(0.01f, multiplicadorVida);
+
+        // Escalamos la vida maxima y actual.
+        vidaMaxima = Mathf.Max(1f, vidaMaxima * multiplicadorSeguro);
+        vidaActual = vidaMaxima;
+
+        // Si corresponde, sumamos experiencia extra al eliminarlo.
+        experienciaOtorgada = Mathf.Max(1, experienciaOtorgada + experienciaExtra);
+
+        // Actualizamos la UI escuchando este evento.
+        AlVidaActualizada?.Invoke(vidaActual, vidaMaxima);
+    }
+
+    // Este metodo inicia o reinicia el flash blanco de impacto.
+    private void IniciarFlashBlanco()
+    {
+        // Si ya habia un flash activo, lo detenemos para reiniciarlo limpio.
+        if (rutinaFlashBlanco != null)
+        {
+            StopCoroutine(rutinaFlashBlanco);
+            rutinaFlashBlanco = null;
+            RestaurarMaterialesVisuales();
+        }
+
+        // Lanzamos la corrutina de flash.
+        rutinaFlashBlanco = StartCoroutine(RutinaFlashBlanco());
+    }
+
+    // Esta corrutina vuelve blancos los materiales y luego los restaura.
+    private IEnumerator RutinaFlashBlanco()
+    {
+        // Si no hay renderers, no tenemos nada que iluminar.
+        if (renderizadoresVisuales == null || renderizadoresVisuales.Length == 0)
+        {
+            yield break;
+        }
+
+        // Pintamos todo de blanco para simular el destello.
+        AplicarColorTemporalVisual(colorFlashBlanco);
+
+        // Esperamos el tiempo pedido usando tiempo real.
+        yield return new WaitForSecondsRealtime(Mathf.Max(0.01f, duracionFlashBlanco));
+
+        // Restauramos colores originales.
+        RestaurarMaterialesVisuales();
+
+        // Liberamos referencia.
+        rutinaFlashBlanco = null;
+    }
+
+    // Este metodo guarda los materiales y colores originales para poder hacer flash sin romper el modelo.
+    private void CapturarMaterialesVisuales()
+    {
+        // Tomamos todos los renderers visuales del enemigo, incluyendo hijos inactivos.
+        renderizadoresVisuales = GetComponentsInChildren<Renderer>(true);
+
+        // Si no hay renderers, no hay nada mas que preparar.
+        if (renderizadoresVisuales == null || renderizadoresVisuales.Length == 0)
+        {
+            materialesOriginales = null;
+            coloresOriginales = null;
+            return;
+        }
+
+        // Creamos las estructuras para guardar materiales y colores.
+        materialesOriginales = new Material[renderizadoresVisuales.Length][];
+        coloresOriginales = new Color[renderizadoresVisuales.Length][];
+
+        // Recorremos cada renderer para copiar su estado visual.
+        for (int indiceRenderer = 0; indiceRenderer < renderizadoresVisuales.Length; indiceRenderer++)
+        {
+            Renderer rendererActual = renderizadoresVisuales[indiceRenderer];
+            if (rendererActual == null)
+            {
+                continue;
+            }
+
+            Material[] materialesInstancia = rendererActual.materials;
+            materialesOriginales[indiceRenderer] = materialesInstancia;
+            coloresOriginales[indiceRenderer] = new Color[materialesInstancia.Length];
+
+            for (int indiceMaterial = 0; indiceMaterial < materialesInstancia.Length; indiceMaterial++)
+            {
+                Material materialActual = materialesInstancia[indiceMaterial];
+                coloresOriginales[indiceRenderer][indiceMaterial] = ObtenerColorMaterial(materialActual);
+            }
+        }
+    }
+
+    // Este metodo pinta temporalmente todos los materiales con un color dado.
+    private void AplicarColorTemporalVisual(Color colorObjetivo)
+    {
+        if (renderizadoresVisuales == null)
+        {
+            return;
+        }
+
+        for (int indiceRenderer = 0; indiceRenderer < renderizadoresVisuales.Length; indiceRenderer++)
+        {
+            if (renderizadoresVisuales[indiceRenderer] == null || materialesOriginales == null || indiceRenderer >= materialesOriginales.Length)
+            {
+                continue;
+            }
+
+            Material[] materialesInstancia = materialesOriginales[indiceRenderer];
+            if (materialesInstancia == null)
+            {
+                continue;
+            }
+
+            for (int indiceMaterial = 0; indiceMaterial < materialesInstancia.Length; indiceMaterial++)
+            {
+                Material materialActual = materialesInstancia[indiceMaterial];
+                if (materialActual == null)
+                {
+                    continue;
+                }
+
+                EstablecerColorMaterial(materialActual, colorObjetivo);
+            }
+        }
+    }
+
+    // Este metodo restaura los colores que tenia cada material antes del flash.
+    private void RestaurarMaterialesVisuales()
+    {
+        if (renderizadoresVisuales == null || materialesOriginales == null || coloresOriginales == null)
+        {
+            return;
+        }
+
+        for (int indiceRenderer = 0; indiceRenderer < renderizadoresVisuales.Length; indiceRenderer++)
+        {
+            if (renderizadoresVisuales[indiceRenderer] == null || materialesOriginales == null || coloresOriginales == null)
+            {
+                continue;
+            }
+
+            Material[] materialesInstancia = materialesOriginales[indiceRenderer];
+            Color[] coloresInstancia = coloresOriginales[indiceRenderer];
+            if (materialesInstancia == null || coloresInstancia == null)
+            {
+                continue;
+            }
+
+            for (int indiceMaterial = 0; indiceMaterial < materialesInstancia.Length; indiceMaterial++)
+            {
+                Material materialActual = materialesInstancia[indiceMaterial];
+                if (materialActual == null || indiceMaterial >= coloresInstancia.Length)
+                {
+                    continue;
+                }
+
+                EstablecerColorMaterial(materialActual, coloresInstancia[indiceMaterial]);
+            }
+        }
+    }
+
+    // Este metodo obtiene el color actual de un material de forma segura.
+    private Color ObtenerColorMaterial(Material material)
+    {
+        if (material == null)
+        {
+            return Color.white;
+        }
+
+        if (material.HasProperty("_Color"))
+        {
+            return material.color;
+        }
+
+        if (material.HasProperty("_BaseColor"))
+        {
+            return material.GetColor("_BaseColor");
+        }
+
+        return Color.white;
+    }
+
+    // Este metodo establece un color en un material sin importar el shader exacto.
+    private void EstablecerColorMaterial(Material material, Color color)
+    {
+        if (material == null)
+        {
+            return;
+        }
+
+        if (material.HasProperty("_Color"))
+        {
+            material.color = color;
+        }
+
+        if (material.HasProperty("_BaseColor"))
+        {
+            material.SetColor("_BaseColor", color);
         }
     }
 

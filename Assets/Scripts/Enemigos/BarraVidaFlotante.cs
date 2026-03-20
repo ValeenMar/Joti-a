@@ -6,10 +6,16 @@ using UnityEngine;
 public class BarraVidaFlotante : MonoBehaviour
 {
     // Este offset define a que altura se dibuja la barra sobre el enemigo.
-    [SerializeField] private Vector3 offsetBarra = new Vector3(0f, 2.2f, 0f);
+    [SerializeField] private Vector3 offsetBarra = new Vector3(0f, 2.9f, 0f);
 
     // Este tamano define el ancho y alto de la barra en pantalla.
-    [SerializeField] private Vector2 tamanoBarra = new Vector2(70f, 10f);
+    [SerializeField] private Vector2 tamanoBarra = new Vector2(96f, 12f);
+
+    // Este valor suma un extra por encima de la cabeza real del modelo.
+    [SerializeField] private float alturaExtraSobreCabeza = 0.35f;
+
+    // Este margen evita que la barra quede fuera de pantalla cuando el enemigo se acerca.
+    [SerializeField] private float margenPantalla = 8f;
 
     // Esta velocidad suaviza el valor mostrado para que no cambie de golpe.
     [SerializeField] private float velocidadSuavizado = 8f;
@@ -29,6 +35,9 @@ public class BarraVidaFlotante : MonoBehaviour
     // Esta referencia guarda la camara principal para convertir mundo a pantalla.
     private Camera camaraPrincipal;
 
+    // Esta lista guarda los renderizadores del modelo para calcular mejor la altura de la barra.
+    private Renderer[] renderizadoresModelo;
+
     // Este valor representa la vida objetivo normalizada.
     private float valorObjetivo = 1f;
 
@@ -43,6 +52,9 @@ public class BarraVidaFlotante : MonoBehaviour
     {
         // Obtenemos la referencia a la vida del enemigo.
         vidaEnemigo = GetComponent<VidaEnemigo>();
+
+        // Cacheamos renderizadores del modelo para ubicar la barra mas arriba de la cabeza real.
+        renderizadoresModelo = GetComponentsInChildren<Renderer>(true);
     }
 
     // Esta funcion se ejecuta al habilitar el componente.
@@ -95,7 +107,7 @@ public class BarraVidaFlotante : MonoBehaviour
         }
 
         // Calculamos la posicion del enemigo en pantalla usando el offset configurado.
-        Vector3 posicionPantalla = camaraPrincipal.WorldToScreenPoint(transform.position + offsetBarra);
+        Vector3 posicionPantalla = camaraPrincipal.WorldToScreenPoint(ObtenerPuntoMundoBarra());
 
         // Si el punto quedo detras de la camara, no dibujamos la barra.
         if (posicionPantalla.z <= 0f)
@@ -106,6 +118,10 @@ public class BarraVidaFlotante : MonoBehaviour
         // Convertimos la coordenada Y de mundo a espacio GUI.
         float posicionX = posicionPantalla.x - tamanoBarra.x * 0.5f;
         float posicionY = Screen.height - posicionPantalla.y - tamanoBarra.y * 0.5f;
+
+        // Clampeamos para que el HUD enemigo no se pierda en bordes al estar muy cerca.
+        posicionX = Mathf.Clamp(posicionX, margenPantalla, Screen.width - tamanoBarra.x - margenPantalla);
+        posicionY = Mathf.Clamp(posicionY, margenPantalla, Screen.height - tamanoBarra.y - margenPantalla);
 
         // Armamos el rectangulo base de la barra.
         Rect rectanguloFondo = new Rect(posicionX, posicionY, tamanoBarra.x, tamanoBarra.y);
@@ -126,6 +142,48 @@ public class BarraVidaFlotante : MonoBehaviour
 
         // Restauramos el color original de la GUI.
         GUI.color = colorAnterior;
+    }
+
+    // Este metodo calcula el punto del mundo donde conviene dibujar la barra de vida.
+    private Vector3 ObtenerPuntoMundoBarra()
+    {
+        // Si no tenemos renderizadores, usamos el offset fijo como respaldo.
+        if (renderizadoresModelo == null || renderizadoresModelo.Length == 0)
+        {
+            return transform.position + offsetBarra;
+        }
+
+        // Combinamos bounds del modelo para ubicar la cabeza real.
+        Bounds bounds = new Bounds(transform.position, Vector3.zero);
+        bool encontroBounds = false;
+
+        for (int indice = 0; indice < renderizadoresModelo.Length; indice++)
+        {
+            Renderer renderizador = renderizadoresModelo[indice];
+            if (renderizador == null || !renderizador.enabled)
+            {
+                continue;
+            }
+
+            if (!encontroBounds)
+            {
+                bounds = renderizador.bounds;
+                encontroBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderizador.bounds);
+            }
+        }
+
+        // Si no hubo bounds validos, volvemos al offset simple.
+        if (!encontroBounds)
+        {
+            return transform.position + offsetBarra;
+        }
+
+        // Devolvemos un punto centrado en XZ y bien arriba de la cabeza.
+        return new Vector3(bounds.center.x, bounds.max.y + alturaExtraSobreCabeza, bounds.center.z);
     }
 
     // Este metodo responde cada vez que cambia la vida actual.

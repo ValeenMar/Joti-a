@@ -34,6 +34,12 @@ public class MovimientoJugador : MonoBehaviour
     // Esta variable guarda el controlador de animacion del jugador para sincronizar velocidad y sprint.
     private ControladorAnimacionJugador controladorAnimacionJugador;
 
+    // Esta referencia guarda el Animator visual para consultar si el personaje esta plantado durante el swing.
+    private Animator animatorVisualJugador;
+
+    // Esta referencia guarda el sistema de defensa para reflejar el bloqueo visual del parry.
+    private SistemaDefensaEspada sistemaDefensaEspada;
+
     // Esta variable guarda cuanto quiere moverse el jugador en horizontal.
     private float entradaHorizontal;
 
@@ -45,6 +51,15 @@ public class MovimientoJugador : MonoBehaviour
 
     // Esta variable indica si finalmente este frame se esta aplicando el sprint.
     private bool estaCorriendo;
+
+    // Esta variable indica si el jugador toca el piso en este frame.
+    private bool estaEnSuelo;
+
+    // Esta variable indica si la animacion actual esta bloqueando movimiento por ataque o muerte.
+    private bool estaPlantadoPorAnimacion;
+
+    // Esta distancia se usa para comprobar el suelo bajo el jugador.
+    [SerializeField] private float distanciaChequeoSuelo = 1.1f;
 
     // Esta variable guarda la posicion fisica anterior del jugador para interpolar mejor en render.
     private Vector3 posicionFisicaAnterior;
@@ -76,6 +91,12 @@ public class MovimientoJugador : MonoBehaviour
             controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
         }
 
+        // Buscamos tambien el Animator visual del jugador para leer el bool Plantado.
+        animatorVisualJugador = BuscarAnimatorJugador();
+
+        // Buscamos el sistema de defensa para reflejar el estado de bloqueo en el Animator.
+        sistemaDefensaEspada = GetComponent<SistemaDefensaEspada>();
+
         // Intentamos encontrar la camara principal para que el movimiento sea relativo a su direccion.
         camaraPrincipal = Camera.main;
 
@@ -102,13 +123,99 @@ public class MovimientoJugador : MonoBehaviour
         // Leemos si el jugador esta intentando correr con alguna de las dos teclas de sprint.
         quiereCorrer = Input.GetKey(teclaSprintPrincipal) || Input.GetKey(teclaSprintSecundaria);
 
+        // Si el Animator visual se perdio por un reload, lo buscamos otra vez.
+        if (animatorVisualJugador == null)
+        {
+            animatorVisualJugador = BuscarAnimatorJugador();
+        }
+
+        // Calculamos si la animacion actual esta plantando al personaje.
+        estaPlantadoPorAnimacion = ObtenerEstadoPlantadoDesdeAnimacion();
+
+        // Si el jugador esta plantado por un swing o una muerte, bloqueamos el input de locomocion.
+        if (estaPlantadoPorAnimacion)
+        {
+            // Limpiamos entrada para que no quede un arrastre del frame anterior.
+            entradaHorizontal = 0f;
+            entradaVertical = 0f;
+            quiereCorrer = false;
+            estaCorriendo = false;
+
+            // Seguimos actualizando suelo para no romper la logica visual.
+            ActualizarEstadoSuelo();
+
+            // Si existe controlador de animacion, le avisamos que la velocidad visual debe quedar en cero.
+            if (controladorAnimacionJugador == null)
+            {
+                controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
+            }
+
+            if (controladorAnimacionJugador != null)
+            {
+                controladorAnimacionJugador.SincronizarMovimiento(0f, false);
+                controladorAnimacionJugador.SincronizarEstadoSuelo(estaEnSuelo);
+            }
+
+            ActualizarParametrosDirectosAnimator(0f, false, estaEnSuelo, EstaBloqueandoVisualmente());
+
+            // Salimos para no procesar giro, sprint ni locomocion este frame.
+            return;
+        }
+
         // Actualizamos si este frame realmente puede correr segun input y estamina.
         ActualizarEstadoSprint();
+
+        // Actualizamos si el jugador sigue pisando suelo para informar al Animator.
+        ActualizarEstadoSuelo();
+
+        // Si el jugador se esta moviendo, giramos el personaje hacia la direccion de avance.
+        ActualizarRotacionVisualSegunMovimiento();
+
+        // Si se perdio la referencia del controlador de animacion, la recuperamos.
+        if (controladorAnimacionJugador == null)
+        {
+            controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
+        }
+
+        // Si existe un controlador de animacion, le informamos si el jugador esta en suelo.
+        if (controladorAnimacionJugador != null)
+        {
+            controladorAnimacionJugador.SincronizarEstadoSuelo(estaEnSuelo);
+        }
+
+        ActualizarParametrosDirectosAnimatorDesdeMovimiento();
+        ActualizarAnimatorPaladinDesdeMovimiento();
     }
 
     // Esta funcion se ejecuta a ritmo de fisica y es ideal para mover un Rigidbody.
     private void FixedUpdate()
     {
+        // Si la animacion actual esta plantando al personaje, bloqueamos locomocion fisica.
+        if (estaPlantadoPorAnimacion)
+        {
+            // Mantenemos la posicion actual para no interpolar arrastres visuales.
+            posicionFisicaAnterior = posicionFisicaActual;
+            posicionFisicaActual = cuerpoRigido.position;
+
+            // Cortamos la velocidad horizontal por seguridad, pero respetamos la vertical.
+            cuerpoRigido.velocity = new Vector3(0f, cuerpoRigido.velocity.y, 0f);
+
+            // Si existe controlador de animacion, informamos que no hay velocidad de locomocion.
+            if (controladorAnimacionJugador == null)
+            {
+                controladorAnimacionJugador = GetComponentInChildren<ControladorAnimacionJugador>(true);
+            }
+
+            if (controladorAnimacionJugador != null)
+            {
+                controladorAnimacionJugador.SincronizarMovimiento(0f, false);
+                controladorAnimacionJugador.SincronizarEstadoSuelo(estaEnSuelo);
+            }
+
+            // No procesamos movimiento mientras dura el swing.
+            return;
+        }
+
         // Calculamos la direccion de movimiento tomando como referencia la camara si existe.
         Vector3 direccionMovimiento = ObtenerDireccionMovimiento();
 
@@ -145,8 +252,19 @@ public class MovimientoJugador : MonoBehaviour
         // Calculamos la posicion final a la que queremos llegar en este paso.
         Vector3 posicionDestino = cuerpoRigido.position + desplazamiento;
 
-        // Calculamos la velocidad visual que vamos a pasar al animator.
-        float velocidadVisualAnimacion = intensidadMovimiento * velocidadFinal;
+        // Calculamos una velocidad maxima de referencia para normalizar la locomocion visual entre 0 y 1.
+        float velocidadMaximaReferencia = velocidadMovimiento * multiplicadorSprint;
+
+        // Si el jugador tiene estadisticas, usamos su velocidad real como nueva base de referencia.
+        if (estadisticasJugador != null)
+        {
+            velocidadMaximaReferencia = Mathf.Max(velocidadMaximaReferencia, estadisticasJugador.VelocidadActual * multiplicadorSprint);
+        }
+
+        // Calculamos la velocidad visual normalizada para que el Animator responda de forma consistente.
+        float velocidadVisualAnimacion = velocidadMaximaReferencia > 0.001f
+            ? Mathf.Clamp01((intensidadMovimiento * velocidadFinal) / velocidadMaximaReferencia)
+            : 0f;
 
         // Guardamos la posicion fisica anterior para poder interpolar luego en render.
         posicionFisicaAnterior = posicionFisicaActual;
@@ -167,6 +285,7 @@ public class MovimientoJugador : MonoBehaviour
         if (controladorAnimacionJugador != null)
         {
             controladorAnimacionJugador.SincronizarMovimiento(velocidadVisualAnimacion, estaCorriendo);
+            controladorAnimacionJugador.SincronizarEstadoSuelo(estaEnSuelo);
         }
     }
 
@@ -261,6 +380,232 @@ public class MovimientoJugador : MonoBehaviour
 
         // Si la magnitud al cuadrado es suficientemente grande, consideramos que si hay movimiento.
         return entradaMovimiento.sqrMagnitude > 0.0001f;
+    }
+
+    // Esta funcion comprueba con un raycast si el jugador toca suelo.
+    private void ActualizarEstadoSuelo()
+    {
+        // Elegimos un origen apenas por encima de la base del jugador para evitar falsos negativos.
+        Vector3 origenChequeoSuelo = transform.position + Vector3.up * 0.1f;
+
+        // Lanzamos un raycast corto hacia abajo para saber si hay piso debajo.
+        estaEnSuelo = Physics.Raycast(origenChequeoSuelo, Vector3.down, distanciaChequeoSuelo, ~0, QueryTriggerInteraction.Ignore);
+    }
+
+    // Esta funcion gira suavemente al jugador hacia la direccion real en la que se mueve.
+    private void ActualizarRotacionVisualSegunMovimiento()
+    {
+        // Calculamos la direccion de movimiento usando el mismo criterio que usa la locomocion.
+        Vector3 direccionMovimiento = ObtenerDireccionMovimiento();
+
+        // Quitamos cualquier componente vertical para no inclinar el personaje.
+        direccionMovimiento.y = 0f;
+
+        // Si casi no hay movimiento, no cambiamos la orientacion.
+        if (direccionMovimiento.magnitude <= 0.1f)
+        {
+            return;
+        }
+
+        // Calculamos una rotacion que mire hacia la direccion de avance actual.
+        Quaternion rotacionObjetivo = Quaternion.LookRotation(direccionMovimiento.normalized);
+
+        // Giramos con suavidad para que no se vea brusco.
+        transform.rotation = Quaternion.Slerp(transform.rotation, rotacionObjetivo, Time.deltaTime * 12f);
+    }
+
+    // Este metodo empuja parametros directos al Animator nuevo del paladin sin depender solo del puente visual.
+    private void ActualizarParametrosDirectosAnimatorDesdeMovimiento()
+    {
+        if (animatorVisualJugador == null)
+        {
+            return;
+        }
+
+        float velocidadMaximaReferencia = velocidadMovimiento * multiplicadorSprint;
+        if (estadisticasJugador != null)
+        {
+            velocidadMaximaReferencia = Mathf.Max(velocidadMaximaReferencia, estadisticasJugador.VelocidadActual * multiplicadorSprint);
+        }
+
+        float velocidadHorizontal = cuerpoRigido != null
+            ? new Vector3(cuerpoRigido.velocity.x, 0f, cuerpoRigido.velocity.z).magnitude
+            : 0f;
+
+        float speedNorm = velocidadMaximaReferencia > 0.001f
+            ? Mathf.Clamp01(velocidadHorizontal / velocidadMaximaReferencia)
+            : 0f;
+
+        ActualizarParametrosDirectosAnimator(speedNorm, estaCorriendo, estaEnSuelo, EstaBloqueandoVisualmente());
+    }
+
+    // Este metodo empuja al PaladinAnimator los parametros Speed e IsSprinting usando las variables reales del movimiento.
+    private void ActualizarAnimatorPaladinDesdeMovimiento()
+    {
+        if (animatorVisualJugador == null)
+        {
+            animatorVisualJugador = BuscarAnimatorJugador();
+        }
+
+        if (animatorVisualJugador == null || cuerpoRigido == null)
+        {
+            return;
+        }
+
+        float velocidadMaxima = velocidadMovimiento * multiplicadorSprint;
+        if (estadisticasJugador != null)
+        {
+            velocidadMaxima = Mathf.Max(velocidadMaxima, estadisticasJugador.VelocidadActual * multiplicadorSprint);
+        }
+
+        if (velocidadMaxima <= 0.001f)
+        {
+            velocidadMaxima = 1f;
+        }
+
+        float vel = new Vector3(cuerpoRigido.velocity.x, 0f, cuerpoRigido.velocity.z).magnitude;
+        if (AnimatorTieneParametro("Speed", AnimatorControllerParameterType.Float))
+        {
+            animatorVisualJugador.SetFloat("Speed", Mathf.Clamp01(vel / velocidadMaxima), 0.1f, Time.deltaTime);
+        }
+
+        if (AnimatorTieneParametro("IsSprinting", AnimatorControllerParameterType.Bool))
+        {
+            animatorVisualJugador.SetBool("IsSprinting", estaCorriendo);
+        }
+
+        Vector3 dir = new Vector3(cuerpoRigido.velocity.x, 0f, cuerpoRigido.velocity.z);
+        if (dir.magnitude > 0.1f)
+        {
+            transform.rotation = Quaternion.Slerp(
+                transform.rotation,
+                Quaternion.LookRotation(dir.normalized),
+                Time.deltaTime * 10f);
+        }
+    }
+
+    // Este metodo setea Speed, sprint, suelo y bloqueo solo si el Animator expone esos parametros.
+    private void ActualizarParametrosDirectosAnimator(float speedNorm, bool sprint, bool grounded, bool blocking)
+    {
+        if (animatorVisualJugador == null)
+        {
+            return;
+        }
+
+        EstablecerFloatAnimatorSiExiste("Speed", speedNorm);
+        EstablecerBoolAnimatorSiExiste("IsSprinting", sprint);
+        EstablecerBoolAnimatorSiExiste("IsGrounded", grounded);
+        EstablecerBoolAnimatorSiExiste("IsBlocking", blocking);
+    }
+
+    // Este metodo deriva un bloqueo visual corto desde el sistema real de parry.
+    private bool EstaBloqueandoVisualmente()
+    {
+        if (sistemaDefensaEspada == null)
+        {
+            sistemaDefensaEspada = GetComponent<SistemaDefensaEspada>();
+        }
+
+        if (sistemaDefensaEspada == null)
+        {
+            return false;
+        }
+
+        return sistemaDefensaEspada.ParryEnCurso || sistemaDefensaEspada.VentanaActiva;
+    }
+
+    // Este metodo setea un float del Animator solo si el parametro existe y coincide en tipo.
+    private void EstablecerFloatAnimatorSiExiste(string nombreParametro, float valor)
+    {
+        if (!AnimatorTieneParametro(nombreParametro, AnimatorControllerParameterType.Float))
+        {
+            return;
+        }
+
+        animatorVisualJugador.SetFloat(nombreParametro, valor, 0.1f, Time.deltaTime);
+    }
+
+    // Este metodo setea un bool del Animator solo si el parametro existe y coincide en tipo.
+    private void EstablecerBoolAnimatorSiExiste(string nombreParametro, bool valor)
+    {
+        if (!AnimatorTieneParametro(nombreParametro, AnimatorControllerParameterType.Bool))
+        {
+            return;
+        }
+
+        animatorVisualJugador.SetBool(nombreParametro, valor);
+    }
+
+    // Este metodo comprueba si el Animator visual actual tiene un parametro dado.
+    private bool AnimatorTieneParametro(string nombreParametro, AnimatorControllerParameterType tipoEsperado)
+    {
+        if (animatorVisualJugador == null)
+        {
+            return false;
+        }
+
+        AnimatorControllerParameter[] parametros = animatorVisualJugador.parameters;
+        for (int i = 0; i < parametros.Length; i++)
+        {
+            if (parametros[i].name == nombreParametro)
+            {
+                return parametros[i].type == tipoEsperado;
+            }
+        }
+
+        return false;
+    }
+
+    // Este metodo prioriza el Animator del hijo ModeloJugador para evitar agarrar un Animator viejo o incorrecto.
+    private Animator BuscarAnimatorJugador()
+    {
+        Transform modeloJugador = transform.Find("ModeloJugador");
+        if (modeloJugador != null)
+        {
+            Animator animatorModelo = modeloJugador.GetComponent<Animator>();
+            if (animatorModelo != null)
+            {
+                return animatorModelo;
+            }
+
+            animatorModelo = modeloJugador.GetComponentInChildren<Animator>(true);
+            if (animatorModelo != null)
+            {
+                return animatorModelo;
+            }
+        }
+
+        return GetComponentInChildren<Animator>(true);
+    }
+
+    // Este metodo consulta si el Animator visual actual tiene activo el bool Plantado.
+    private bool ObtenerEstadoPlantadoDesdeAnimacion()
+    {
+        // Si falta Animator, asumimos que no esta plantado.
+        if (animatorVisualJugador == null)
+        {
+            return false;
+        }
+
+        // Recorremos los parametros reales del Animator para verificar que exista el bool.
+        AnimatorControllerParameter[] parametros = animatorVisualJugador.parameters;
+        for (int indiceParametro = 0; indiceParametro < parametros.Length; indiceParametro++)
+        {
+            if (parametros[indiceParametro].name != "Plantado")
+            {
+                continue;
+            }
+
+            if (parametros[indiceParametro].type != AnimatorControllerParameterType.Bool)
+            {
+                return false;
+            }
+
+            return animatorVisualJugador.GetBool("Plantado");
+        }
+
+        // Si el parametro no existe, consideramos que no esta plantado.
+        return false;
     }
 
     // Esta funcion devuelve una posicion interpolada entre el ultimo y el proximo paso de fisica.

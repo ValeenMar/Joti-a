@@ -28,6 +28,12 @@ public static class EventosJuego
     // Este evento avisa que un jugador acaba de lanzar un ataque.
     public static event Action<GameObject, bool> AlJugadorLanzoAtaque;
 
+    // Este evento avisa que el jugador resolvio un parry exitoso sobre un enemigo.
+    public static event Action<GameObject, GameObject> AlParryExitoso;
+
+    // Este evento avisa que el jugador intento un parry pero no conecto a tiempo.
+    public static event Action<GameObject> AlParryFallido;
+
     // Este método dispara el evento de daño aplicado.
     public static void NotificarDanioAplicado(DatosDanio datosDanio)
     {
@@ -82,5 +88,19 @@ public static class EventosJuego
     {
         // Si hay oyentes suscriptos, les enviamos el jugador y si el golpe era fuerte.
         AlJugadorLanzoAtaque?.Invoke(jugador, esGolpeFuerte);
+    }
+
+    // Este metodo dispara el evento de parry exitoso.
+    public static void NotificarParryExitoso(GameObject jugador, GameObject enemigo)
+    {
+        // Si hay oyentes suscriptos, les enviamos quien hizo parry y sobre que enemigo.
+        AlParryExitoso?.Invoke(jugador, enemigo);
+    }
+
+    // Este metodo dispara el evento de parry fallido.
+    public static void NotificarParryFallido(GameObject jugador)
+    {
+        // Si hay oyentes suscriptos, les avisamos que el jugador fallo el timing.
+        AlParryFallido?.Invoke(jugador);
     }
 }

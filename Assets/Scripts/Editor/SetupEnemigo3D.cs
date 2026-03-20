@@ -12,10 +12,16 @@ using UnityEngine.AI;
 
 public static class SetupEnemigo3D
 {
+    private const string NombreContenedorVisual = "VisualEnemigo";
     private const string RutaAnimacionesRaiz = "Assets/Animaciones";
     private const string RutaAnimacionesEnemigo = "Assets/Animaciones/Enemigo";
     private const string RutaClipsEnemigo = "Assets/Animaciones/Enemigo/Clips";
     private const string RutaController = "Assets/Animaciones/Enemigo/EnemigoController.controller";
+    private const string RutaCarpetaMateriales = "Assets/Materials";
+    private const string RutaMaterialHueso = "Assets/Materials/Material_Esqueleto_Hueso.mat";
+    private static readonly Color ColorMaterialHueso = new Color(0.82f, 0.78f, 0.70f, 1f);
+    private const float GlossinessMaterialHueso = 0.05f;
+    private const float MetallicMaterialHueso = 0f;
 
     private const string RutaClipIdle = "Assets/Animaciones/Enemigo/Clips/Idle.anim";
     private const string RutaClipPatrullar = "Assets/Animaciones/Enemigo/Clips/Patrullar.anim";
@@ -23,6 +29,13 @@ public static class SetupEnemigo3D
     private const string RutaClipAtacar = "Assets/Animaciones/Enemigo/Clips/Atacar.anim";
     private const string RutaClipRecibirDanio = "Assets/Animaciones/Enemigo/Clips/RecibirDanio.anim";
     private const string RutaClipMorir = "Assets/Animaciones/Enemigo/Clips/Morir.anim";
+
+    private const string RutaIdleImportado = "Assets/Animations/Breathing Idle.fbx";
+    private const string RutaCaminarImportado = "Assets/Animations/Walking.fbx";
+    private const string RutaCorrerImportado = "Assets/Animations/Running.fbx";
+    private const string RutaAtacarImportado = "Assets/Animations/Sword And Shield Slash.fbx";
+    private const string RutaRecibirDanioImportado = "Assets/Animations/Hit Reaction.fbx";
+    private const string RutaMorirImportado = "Assets/Animations/Dying.fbx";
 
     [MenuItem("Realm Brawl/Setup/Enemigo Esqueleto 3D")]
     public static void ConfigurarEnemigoEsqueleto3D()
@@ -53,6 +66,7 @@ public static class SetupEnemigo3D
 
         AnimatorController controller = CrearControllerYClips(prefabEsqueleto);
 
+        EliminarVisualesPrevios(enemigo.transform);
         Transform contenedorModelo = ObtenerOCrearContenedor(enemigo.transform);
         LimpiarHijos(contenedorModelo);
 
@@ -62,34 +76,60 @@ public static class SetupEnemigo3D
         modelo.transform.localRotation = Quaternion.identity;
         modelo.transform.localScale = Vector3.one;
 
-        Animator animador = modelo.GetComponent<Animator>();
+        Animator animador = BuscarAnimatorVisualModelo(modelo.transform);
         if (animador != null)
         {
             animador.runtimeAnimatorController = controller;
+            animador.avatar = ObtenerAvatarDesdePrefab(prefabEsqueleto, animador);
             animador.applyRootMotion = false;
             animador.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            animador.updateMode = AnimatorUpdateMode.Normal;
+            EditorUtility.SetDirty(animador);
+        }
+        else
+        {
+            animador = modelo.AddComponent<Animator>();
+            animador.runtimeAnimatorController = controller;
+            animador.avatar = ObtenerAvatarDesdePrefab(prefabEsqueleto, animador);
+            animador.applyRootMotion = false;
+            animador.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            animador.updateMode = AnimatorUpdateMode.Normal;
             EditorUtility.SetDirty(animador);
         }
 
-        ControladorAnimacionEnemigo controladorAnimacion = modelo.GetComponent<ControladorAnimacionEnemigo>();
+        ControladorAnimacionEnemigo controladorEnContenedor = modelo.GetComponent<ControladorAnimacionEnemigo>();
+        if (controladorEnContenedor != null && controladorEnContenedor.gameObject != animador.gameObject)
+        {
+            Object.DestroyImmediate(controladorEnContenedor);
+        }
+
+        ControladorAnimacionEnemigo controladorAnimacion = animador.GetComponent<ControladorAnimacionEnemigo>();
         if (controladorAnimacion == null)
         {
-            controladorAnimacion = modelo.AddComponent<ControladorAnimacionEnemigo>();
+            controladorAnimacion = animador.gameObject.AddComponent<ControladorAnimacionEnemigo>();
         }
 
         SerializedObject soControlador = new SerializedObject(controladorAnimacion);
         soControlador.FindProperty("animador").objectReferenceValue = animador;
         soControlador.FindProperty("enemigoDummy").objectReferenceValue = enemigo;
+        soControlador.FindProperty("feedbackCombate").objectReferenceValue = enemigo.GetComponentInChildren<FeedbackCombate>(true);
         soControlador.FindProperty("agenteNavMesh").objectReferenceValue = enemigo.GetComponent<NavMeshAgent>();
+        soControlador.FindProperty("raizVisual").objectReferenceValue = modelo.transform;
         soControlador.ApplyModifiedPropertiesWithoutUndo();
         EditorUtility.SetDirty(controladorAnimacion);
 
         DesactivarVisualVieja(enemigo.gameObject);
+        AlinearEnemigoAlNavMesh(enemigo.transform);
+        AlinearModeloSobreSuelo(modelo.transform, animador);
         AjustarCapsulaYAgente(enemigo.gameObject, modelo.transform);
+        ReinicializarAnimatorSeguro(animador);
         ConfigurarZonasDebiles(enemigo.transform, modelo.transform);
         AdjuntarEspada(modelo.transform, prefabEspada);
+        NormalizarMaterialesModelo(modelo.transform);
+        AplicarMaterialHuesoEditor(modelo);
 
         EnlazarVidaYIA(enemigo, controladorAnimacion);
+        ConfigurarFeedbackVisual(enemigo.gameObject);
 
         PrefabUtility.RecordPrefabInstancePropertyModifications(enemigo);
         PrefabUtility.RecordPrefabInstancePropertyModifications(modelo);
@@ -99,6 +139,8 @@ public static class SetupEnemigo3D
         }
         PrefabUtility.RecordPrefabInstancePropertyModifications(controladorAnimacion);
 
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
         EditorSceneManager.MarkSceneDirty(enemigo.gameObject.scene);
         Selection.activeGameObject = enemigo.gameObject;
 
@@ -112,12 +154,60 @@ public static class SetupEnemigo3D
             AssetDatabase.DeleteAsset(RutaController);
         }
 
-        AnimationClip clipIdle = CrearClip(RutaClipIdle, true, null, ConstruirIdle, prefabEsqueleto);
-        AnimationClip clipPatrullar = CrearClip(RutaClipPatrullar, true, null, ConstruirPatrullar, prefabEsqueleto);
-        AnimationClip clipPerseguir = CrearClip(RutaClipPerseguir, true, null, ConstruirPerseguir, prefabEsqueleto);
-        AnimationClip clipAtacar = CrearClip(RutaClipAtacar, false, CrearEvento("AplicarDanioAtaque", 0.42f), ConstruirAtaque, prefabEsqueleto);
-        AnimationClip clipRecibirDanio = CrearClip(RutaClipRecibirDanio, false, null, ConstruirRecibirDanio, prefabEsqueleto);
-        AnimationClip clipMorir = CrearClip(RutaClipMorir, false, CrearEvento("NotificarMuerteAnimacionTerminada", 1.02f), ConstruirMorir, prefabEsqueleto);
+        AnimationClip clipIdleFuente = CargarClipPrincipalDesdeFbx(RutaIdleImportado);
+        AnimationClip clipPatrullarFuente = CargarClipPrincipalDesdeFbx(RutaCaminarImportado);
+        AnimationClip clipPerseguirFuente = CargarClipPrincipalDesdeFbx(RutaCorrerImportado);
+        AnimationClip clipAtacarFuente = CargarClipPrincipalDesdeFbx(RutaAtacarImportado);
+        AnimationClip clipRecibirDanioFuente = CargarClipPrincipalDesdeFbx(RutaRecibirDanioImportado);
+        AnimationClip clipMorirFuente = CargarClipPrincipalDesdeFbx(RutaMorirImportado);
+
+        AnimationClip clipIdle = CrearClipDesdeFuenteOPlaceholder(
+            RutaClipIdle,
+            clipIdleFuente,
+            true,
+            null,
+            ConstruirIdle,
+            prefabEsqueleto);
+
+        AnimationClip clipPatrullar = CrearClipDesdeFuenteOPlaceholder(
+            RutaClipPatrullar,
+            clipPatrullarFuente,
+            true,
+            null,
+            ConstruirPatrullar,
+            prefabEsqueleto);
+
+        AnimationClip clipPerseguir = CrearClipDesdeFuenteOPlaceholder(
+            RutaClipPerseguir,
+            clipPerseguirFuente,
+            true,
+            null,
+            ConstruirPerseguir,
+            prefabEsqueleto);
+
+        AnimationClip clipAtacar = CrearClipDesdeFuenteOPlaceholder(
+            RutaClipAtacar,
+            clipAtacarFuente,
+            false,
+            CrearEvento("AplicarDanioAtaque", clipAtacarFuente != null ? clipAtacarFuente.length * 0.4f : 0.42f),
+            ConstruirAtaque,
+            prefabEsqueleto);
+
+        AnimationClip clipRecibirDanio = CrearClipDesdeFuenteOPlaceholder(
+            RutaClipRecibirDanio,
+            clipRecibirDanioFuente,
+            false,
+            null,
+            ConstruirRecibirDanio,
+            prefabEsqueleto);
+
+        AnimationClip clipMorir = CrearClipDesdeFuenteOPlaceholder(
+            RutaClipMorir,
+            clipMorirFuente,
+            false,
+            CrearEvento("NotificarMuerteAnimacionTerminada", clipMorirFuente != null ? clipMorirFuente.length * 0.95f : 1.02f),
+            ConstruirMorir,
+            prefabEsqueleto);
 
         AnimatorController controller = AnimatorController.CreateAnimatorControllerAtPath(RutaController);
         AnimatorStateMachine sm = controller.layers[0].stateMachine;
@@ -145,6 +235,10 @@ public static class SetupEnemigo3D
         recibirDanio.motion = clipRecibirDanio;
         morir.motion = clipMorir;
 
+        atacar.speed = 1.05f;
+        recibirDanio.speed = 1.1f;
+        morir.speed = 1f;
+
         sm.defaultState = idle;
 
         CrearTransicionDoble(idle, patrullar, "Velocidad", AnimatorConditionMode.Greater, 0.1f, "Persiguiendo", AnimatorConditionMode.IfNot, 0f, 0.1f, 0f);
@@ -164,8 +258,40 @@ public static class SetupEnemigo3D
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
 
-        Debug.Log("SetupEnemigo3D: controller y clips creados en Assets/Animaciones/Enemigo.");
+        Debug.Log("SetupEnemigo3D: controller y clips del esqueleto creados usando animaciones reales cuando estuvieron disponibles.");
         return controller;
+    }
+
+    private static AnimationClip CrearClipDesdeFuenteOPlaceholder(string ruta, AnimationClip clipFuente, bool loop, AnimationEvent[] eventos, System.Action<AnimationClip, Transform> construirFallback, GameObject prefabEsqueleto)
+    {
+        if (clipFuente != null)
+        {
+            return CrearClipDesdeFuente(ruta, clipFuente, loop, eventos);
+        }
+
+        return CrearClip(ruta, loop, eventos, construirFallback, prefabEsqueleto);
+    }
+
+    private static AnimationClip CrearClipDesdeFuente(string ruta, AnimationClip clipFuente, bool loop, AnimationEvent[] eventos)
+    {
+        if (AssetDatabase.LoadAssetAtPath<AnimationClip>(ruta) != null)
+        {
+            AssetDatabase.DeleteAsset(ruta);
+        }
+
+        AnimationClip clipNuevo = Object.Instantiate(clipFuente);
+        clipNuevo.name = System.IO.Path.GetFileNameWithoutExtension(ruta);
+        AssetDatabase.CreateAsset(clipNuevo, ruta);
+
+        ConfigurarLoop(clipNuevo, loop);
+
+        if (eventos != null && eventos.Length > 0)
+        {
+            AnimationUtility.SetAnimationEvents(clipNuevo, eventos);
+        }
+
+        EditorUtility.SetDirty(clipNuevo);
+        return clipNuevo;
     }
 
     private static AnimationClip CrearClip(string ruta, bool loop, AnimationEvent[] eventos, System.Action<AnimationClip, Transform> construir, GameObject prefabEsqueleto)
@@ -195,6 +321,35 @@ public static class SetupEnemigo3D
             AnimationUtility.SetAnimationEvents(clip, eventos);
         }
         return clip;
+    }
+
+    private static AnimationClip CargarClipPrincipalDesdeFbx(string rutaFbx)
+    {
+        Object[] assetsRuta = AssetDatabase.LoadAllAssetsAtPath(rutaFbx);
+        if (assetsRuta == null || assetsRuta.Length == 0)
+        {
+            Debug.LogWarning("[SetupEnemigo3D] No se encontraron assets en " + rutaFbx);
+            return null;
+        }
+
+        for (int indiceAsset = 0; indiceAsset < assetsRuta.Length; indiceAsset++)
+        {
+            AnimationClip clipActual = assetsRuta[indiceAsset] as AnimationClip;
+            if (clipActual == null)
+            {
+                continue;
+            }
+
+            if (clipActual.name.StartsWith("__"))
+            {
+                continue;
+            }
+
+            return clipActual;
+        }
+
+        Debug.LogWarning("[SetupEnemigo3D] No se encontro un AnimationClip util dentro de " + rutaFbx);
+        return null;
     }
 
     private static void ConstruirIdle(AnimationClip clip, Transform raiz)
@@ -353,6 +508,11 @@ public static class SetupEnemigo3D
         {
             AssetDatabase.CreateFolder(RutaAnimacionesEnemigo, "Clips");
         }
+
+        if (!AssetDatabase.IsValidFolder(RutaCarpetaMateriales))
+        {
+            AssetDatabase.CreateFolder("Assets", "Materials");
+        }
     }
 
     private static GameObject BuscarPrefab(params string[] nombres)
@@ -376,16 +536,44 @@ public static class SetupEnemigo3D
 
     private static Transform ObtenerOCrearContenedor(Transform raiz)
     {
-        Transform existente = raiz.Find("ModeloEnemigo");
+        Transform existente = raiz.Find(NombreContenedorVisual);
         if (existente != null)
         {
             return existente;
         }
 
-        GameObject contenedor = new GameObject("ModeloEnemigo");
+        GameObject contenedor = new GameObject(NombreContenedorVisual);
         contenedor.transform.SetParent(raiz, false);
         Undo.RegisterCreatedObjectUndo(contenedor, "Crear ModeloEnemigo");
         return contenedor.transform;
+    }
+
+    private static void EliminarVisualesPrevios(Transform raizEnemigo)
+    {
+        if (raizEnemigo == null)
+        {
+            return;
+        }
+
+        for (int indiceHijo = raizEnemigo.childCount - 1; indiceHijo >= 0; indiceHijo--)
+        {
+            Transform hijo = raizEnemigo.GetChild(indiceHijo);
+            if (hijo == null)
+            {
+                continue;
+            }
+
+            bool esContenedorVisual = hijo.name == NombreContenedorVisual;
+            bool esModeloDirectoViejo =
+                hijo.name == "ModeloEnemigo" &&
+                (hijo.GetComponentInChildren<SkinnedMeshRenderer>(true) != null ||
+                 hijo.GetComponentInChildren<Animator>(true) != null);
+
+            if (esContenedorVisual || esModeloDirectoViejo)
+            {
+                Object.DestroyImmediate(hijo.gameObject);
+            }
+        }
     }
 
     private static void LimpiarHijos(Transform raiz)
@@ -549,6 +737,389 @@ public static class SetupEnemigo3D
         }
 
         EditorUtility.SetDirty(enemigo);
+    }
+
+    private static void ConfigurarFeedbackVisual(GameObject enemigo)
+    {
+        FeedbackCombate feedback = enemigo.GetComponent<FeedbackCombate>();
+        if (feedback == null)
+        {
+            return;
+        }
+
+        SerializedObject soFeedback = new SerializedObject(feedback);
+        SerializedProperty propiedadColorRango = soFeedback.FindProperty("colorIndicadorRango");
+        SerializedProperty propiedadIntensidad = soFeedback.FindProperty("intensidadIndicadorRango");
+        SerializedProperty propiedadUsarEmision = soFeedback.FindProperty("usarEmision");
+
+        if (propiedadColorRango != null)
+        {
+            propiedadColorRango.colorValue = new Color(1f, 0.3f, 0.3f, 1f);
+        }
+
+        if (propiedadIntensidad != null)
+        {
+            propiedadIntensidad.floatValue = 0.14f;
+        }
+
+        if (propiedadUsarEmision != null)
+        {
+            propiedadUsarEmision.boolValue = false;
+        }
+
+        soFeedback.ApplyModifiedPropertiesWithoutUndo();
+        EditorUtility.SetDirty(feedback);
+    }
+
+    private static void NormalizarMaterialesModelo(Transform modelo)
+    {
+        if (modelo == null)
+        {
+            return;
+        }
+
+        Renderer[] renderers = modelo.GetComponentsInChildren<Renderer>(true);
+        for (int indiceRenderer = 0; indiceRenderer < renderers.Length; indiceRenderer++)
+        {
+            if (renderers[indiceRenderer] == null)
+            {
+                continue;
+            }
+
+            Material[] materiales = renderers[indiceRenderer].sharedMaterials;
+            for (int indiceMaterial = 0; indiceMaterial < materiales.Length; indiceMaterial++)
+            {
+                Material material = materiales[indiceMaterial];
+                if (material == null)
+                {
+                    continue;
+                }
+
+                if (Shader.Find("Standard") != null)
+                {
+                    material.shader = Shader.Find("Standard");
+                }
+
+                bool tieneTexturaBase =
+                    material.mainTexture != null ||
+                    (material.HasProperty("_MainTex") && material.GetTexture("_MainTex") != null) ||
+                    (material.HasProperty("_BaseMap") && material.GetTexture("_BaseMap") != null);
+
+                Color colorActual = material.HasProperty("_Color") ? material.GetColor("_Color") : Color.white;
+                bool colorAmarillo = colorActual.r > 0.7f && colorActual.g > 0.5f && colorActual.b < 0.3f;
+
+                if (!tieneTexturaBase || colorAmarillo)
+                {
+                    if (material.HasProperty("_Color"))
+                    {
+                        material.SetColor("_Color", new Color(0.82f, 0.78f, 0.70f, 1f));
+                    }
+
+                    if (material.HasProperty("_BaseColor"))
+                    {
+                        material.SetColor("_BaseColor", new Color(0.82f, 0.78f, 0.70f, 1f));
+                    }
+
+                    if (material.HasProperty("_Glossiness"))
+                    {
+                        material.SetFloat("_Glossiness", 0.05f);
+                    }
+
+                    if (material.HasProperty("_Metallic"))
+                    {
+                        material.SetFloat("_Metallic", 0f);
+                    }
+
+                    EditorUtility.SetDirty(material);
+                    continue;
+                }
+
+                if (material.HasProperty("_Color"))
+                {
+                    material.SetColor("_Color", Color.white);
+                }
+
+                if (material.HasProperty("_BaseColor"))
+                {
+                    material.SetColor("_BaseColor", Color.white);
+                }
+
+                if (material.HasProperty("_Glossiness"))
+                {
+                    material.SetFloat("_Glossiness", 0.05f);
+                }
+
+                if (material.HasProperty("_Metallic"))
+                {
+                    material.SetFloat("_Metallic", 0f);
+                }
+
+                EditorUtility.SetDirty(material);
+            }
+        }
+    }
+
+    private static void AplicarMaterialHuesoEditor(GameObject esqueleto)
+    {
+        if (esqueleto == null)
+        {
+            return;
+        }
+
+        Material materialHueso = ObtenerOCrearMaterialHuesoEditor();
+        if (materialHueso == null)
+        {
+            return;
+        }
+
+        SkinnedMeshRenderer[] renderers = esqueleto.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        for (int indiceRenderer = 0; indiceRenderer < renderers.Length; indiceRenderer++)
+        {
+            SkinnedMeshRenderer smr = renderers[indiceRenderer];
+            if (smr == null)
+            {
+                continue;
+            }
+
+            Material[] materiales = smr.sharedMaterials;
+            bool modifico = false;
+            for (int indiceMaterial = 0; indiceMaterial < materiales.Length; indiceMaterial++)
+            {
+                Material material = materiales[indiceMaterial];
+                if (material == null)
+                {
+                    continue;
+                }
+
+                if (!EsMaterialHuesoObjetivo(material))
+                {
+                    continue;
+                }
+
+                materiales[indiceMaterial] = materialHueso;
+                modifico = true;
+            }
+
+            if (modifico)
+            {
+                smr.sharedMaterials = materiales;
+                EditorUtility.SetDirty(smr);
+                PrefabUtility.RecordPrefabInstancePropertyModifications(smr);
+            }
+        }
+    }
+
+    private static bool EsMaterialHuesoObjetivo(Material material)
+    {
+        if (material == null)
+        {
+            return false;
+        }
+
+        bool sinTextura =
+            material.mainTexture == null &&
+            (!material.HasProperty("_MainTex") || material.GetTexture("_MainTex") == null) &&
+            (!material.HasProperty("_BaseMap") || material.GetTexture("_BaseMap") == null);
+
+        Color colorActual = material.HasProperty("_Color") ? material.GetColor("_Color") : Color.white;
+        bool colorAmarillo = colorActual.r > 0.7f && colorActual.g > 0.5f && colorActual.b < 0.3f;
+
+        return sinTextura || colorAmarillo;
+    }
+
+    private static Material ObtenerOCrearMaterialHuesoEditor()
+    {
+        if (!AssetDatabase.IsValidFolder(RutaCarpetaMateriales))
+        {
+            AssetDatabase.CreateFolder("Assets", "Materials");
+        }
+
+        Shader shader = Shader.Find("Standard") ?? Shader.Find("Legacy Shaders/Diffuse");
+        if (shader == null)
+        {
+            Debug.LogWarning("[SetupEnemigo3D] No se encontro un shader compatible para Material_Esqueleto_Hueso.");
+            return null;
+        }
+
+        Material material = AssetDatabase.LoadAssetAtPath<Material>(RutaMaterialHueso);
+        if (material == null)
+        {
+            material = new Material(shader);
+            material.name = "Material_Esqueleto_Hueso";
+            AssetDatabase.CreateAsset(material, RutaMaterialHueso);
+        }
+        else
+        {
+            material.shader = shader;
+        }
+
+        material.name = "Material_Esqueleto_Hueso";
+        material.color = ColorMaterialHueso;
+        material.SetFloat("_Glossiness", GlossinessMaterialHueso);
+        material.SetFloat("_Metallic", MetallicMaterialHueso);
+        EditorUtility.SetDirty(material);
+        return material;
+    }
+
+    [MenuItem("Realm Brawl/Setup/Fix Esqueletos")]
+    public static void FixEsqueletosEnEscena()
+    {
+        AsegurarCarpetas();
+
+        EnemigoDummy[] enemigos = Object.FindObjectsOfType<EnemigoDummy>(true);
+        int corregidos = 0;
+
+        for (int indice = 0; indice < enemigos.Length; indice++)
+        {
+            EnemigoDummy enemigo = enemigos[indice];
+            if (enemigo == null || !enemigo.gameObject.scene.IsValid() || !enemigo.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            NormalizarMaterialesModelo(enemigo.transform);
+            AplicarMaterialHuesoEditor(enemigo.gameObject);
+            EditorUtility.SetDirty(enemigo.gameObject);
+            EditorSceneManager.MarkSceneDirty(enemigo.gameObject.scene);
+            corregidos++;
+        }
+
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+
+        Debug.Log("[SetupEnemigo3D] Fix Esqueletos termino. Corregidos: " + corregidos);
+    }
+
+    private static void AlinearModeloSobreSuelo(Transform raizModelo, Animator animador)
+    {
+        if (raizModelo == null)
+        {
+            return;
+        }
+
+        float alturaMinima = float.MaxValue;
+        bool encontroPies = false;
+
+        if (animador != null && animador.isHuman)
+        {
+            Transform pieIzquierdo = animador.GetBoneTransform(HumanBodyBones.LeftFoot);
+            Transform pieDerecho = animador.GetBoneTransform(HumanBodyBones.RightFoot);
+
+            if (pieIzquierdo != null)
+            {
+                alturaMinima = Mathf.Min(alturaMinima, pieIzquierdo.position.y);
+                encontroPies = true;
+            }
+
+            if (pieDerecho != null)
+            {
+                alturaMinima = Mathf.Min(alturaMinima, pieDerecho.position.y);
+                encontroPies = true;
+            }
+        }
+
+        if (!encontroPies)
+        {
+            Renderer[] renderizadores = raizModelo.GetComponentsInChildren<Renderer>(true);
+            if (renderizadores == null || renderizadores.Length == 0)
+            {
+                return;
+            }
+
+            Bounds bounds = renderizadores[0].bounds;
+            for (int indice = 1; indice < renderizadores.Length; indice++)
+            {
+                if (renderizadores[indice] != null)
+                {
+                    bounds.Encapsulate(renderizadores[indice].bounds);
+                }
+            }
+
+            alturaMinima = bounds.min.y;
+        }
+
+        float alturaObjetivo = raizModelo.parent != null ? raizModelo.parent.position.y : 0f;
+        float desplazamientoY = alturaObjetivo - alturaMinima;
+        raizModelo.position += new Vector3(0f, desplazamientoY, 0f);
+    }
+
+    // Este metodo busca el Animator visual principal del modelo del enemigo.
+    private static Animator BuscarAnimatorVisualModelo(Transform raizModelo)
+    {
+        if (raizModelo == null)
+        {
+            return null;
+        }
+
+        Animator[] animadores = raizModelo.GetComponentsInChildren<Animator>(true);
+        for (int indiceAnimator = 0; indiceAnimator < animadores.Length; indiceAnimator++)
+        {
+            if (animadores[indiceAnimator] == null)
+            {
+                continue;
+            }
+
+            if (animadores[indiceAnimator].GetComponentInChildren<SkinnedMeshRenderer>(true) == null)
+            {
+                continue;
+            }
+
+            return animadores[indiceAnimator];
+        }
+
+        return raizModelo.GetComponentInChildren<Animator>(true);
+    }
+
+    private static void AlinearEnemigoAlNavMesh(Transform raizEnemigo)
+    {
+        if (raizEnemigo == null)
+        {
+            return;
+        }
+
+        if (NavMesh.SamplePosition(raizEnemigo.position, out NavMeshHit hit, 6f, NavMesh.AllAreas))
+        {
+            raizEnemigo.position = hit.position;
+        }
+    }
+
+    private static void ReinicializarAnimatorSeguro(Animator animador)
+    {
+        if (animador == null)
+        {
+            return;
+        }
+
+        animador.Rebind();
+
+        if (!animador.gameObject.activeInHierarchy)
+        {
+            return;
+        }
+
+        animador.Update(0f);
+    }
+
+    // Este metodo intenta recuperar el Avatar del prefab fuente del esqueleto.
+    private static Avatar ObtenerAvatarDesdePrefab(GameObject prefabEsqueleto, Animator animadorActual)
+    {
+        if (animadorActual != null && animadorActual.avatar != null)
+        {
+            return animadorActual.avatar;
+        }
+
+        if (prefabEsqueleto == null)
+        {
+            return null;
+        }
+
+        Animator animadorPrefab = prefabEsqueleto.GetComponentInChildren<Animator>(true);
+        if (animadorPrefab != null && animadorPrefab.avatar != null)
+        {
+            return animadorPrefab.avatar;
+        }
+
+        return null;
     }
 
     private static Transform BuscarTransform(Transform raiz, string nombre)

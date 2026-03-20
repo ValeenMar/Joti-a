@@ -211,9 +211,36 @@ public class SistemaEfectos : MonoBehaviour
 
         GameObject objetoEfecto = Instantiate(prefab, posicion, rotacion, contenedorEfectos);
 
-        if (!objetoEfecto.activeSelf)
+        // Dejamos el objeto temporalmente inactivo para que ningun ParticleSystem empiece a correr antes de reiniciarlo.
+        objetoEfecto.SetActive(false);
+
+        // Reiniciamos los sistemas de particulas recien instanciados para que arranquen en un estado limpio.
+        ParticleSystem[] sistemasParticulas = objetoEfecto.GetComponentsInChildren<ParticleSystem>(true);
+        for (int indiceSistema = 0; indiceSistema < sistemasParticulas.Length; indiceSistema++)
         {
-            objetoEfecto.SetActive(true);
+            ParticleSystem sistemaActual = sistemasParticulas[indiceSistema];
+            if (sistemaActual == null)
+            {
+                continue;
+            }
+
+            sistemaActual.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+            sistemaActual.Clear(true);
+        }
+
+        // Activamos el objeto una vez que todos los sistemas quedaron limpios y listos.
+        objetoEfecto.SetActive(true);
+
+        // Recién ahora reproducimos cada sistema para evitar warnings de Unity por configuraciones tardías.
+        for (int indiceSistema = 0; indiceSistema < sistemasParticulas.Length; indiceSistema++)
+        {
+            ParticleSystem sistemaActual = sistemasParticulas[indiceSistema];
+            if (sistemaActual == null)
+            {
+                continue;
+            }
+
+            sistemaActual.Play(true);
         }
 
         float duracionCalculada = Mathf.Max(tiempoVida, CalcularDuracionEfecto(objetoEfecto));

@@ -37,6 +37,23 @@ public class ZonasDebiles : MonoBehaviour
         }
     }
 
+    // Esta funcion devuelve una etiqueta corta y humana para usar en UI y debug.
+    public string ObtenerEtiquetaZona()
+    {
+        // Traducimos el enum a una palabra simple.
+        switch (tipoZona)
+        {
+            case TipoZonaDanio.Cabeza:
+                return "CABEZA";
+
+            case TipoZonaDanio.Espalda:
+                return "ESPALDA";
+
+            default:
+                return "CUERPO";
+        }
+    }
+
     // Esta funcion se ejecuta en el editor cuando cambian valores del inspector.
     private void OnValidate()
     {
@@ -46,5 +63,28 @@ public class ZonasDebiles : MonoBehaviour
             multiplicadorManual = 1f;
         }
     }
-}
 
+    // Este metodo dibuja gizmos para ver facil en el editor donde esta cada zona real del enemigo.
+    private void OnDrawGizmosSelected()
+    {
+        // Elegimos un color por zona para reconocerla rapido.
+        switch (tipoZona)
+        {
+            case TipoZonaDanio.Cabeza:
+                Gizmos.color = new Color(1f, 0.88f, 0.25f, 0.7f);
+                break;
+
+            case TipoZonaDanio.Espalda:
+                Gizmos.color = new Color(1f, 0.5f, 0.2f, 0.7f);
+                break;
+
+            default:
+                Gizmos.color = new Color(0.9f, 0.95f, 1f, 0.45f);
+                break;
+        }
+
+        // Dibujamos una esfera simple de referencia en la posicion de esta zona.
+        Gizmos.matrix = transform.localToWorldMatrix;
+        Gizmos.DrawWireSphere(Vector3.zero, 0.22f);
+    }
+}
