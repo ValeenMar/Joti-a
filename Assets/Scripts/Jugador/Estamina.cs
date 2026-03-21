@@ -12,6 +12,7 @@ namespace RealmBrawl
         [Header("Costos")]
         [SerializeField] float costoSprintPorSegundo = 20f;
         [SerializeField] float costoGolpeFuerte = 30f;
+        [SerializeField] float costoRoll = 20f;
 
         [Header("Agotamiento")]
         [SerializeField] float umbralRecuperacion = 30f;
@@ -80,5 +81,11 @@ namespace RealmBrawl
             agotado = false;
             Eventos.AlCambiarEstamina?.Invoke(estaminaActual, estaminaMaxima);
         }
+
+        /// <summary>True si hay suficiente stamina para hacer un dodge roll.</summary>
+        public bool PuedeDodge() => !agotado && estaminaActual >= costoRoll;
+
+        /// <summary>Consume la stamina del dodge roll.</summary>
+        public void ConsumirRoll() => Consumir(costoRoll);
     }
 }
