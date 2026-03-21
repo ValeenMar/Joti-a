@@ -73,6 +73,8 @@ namespace RealmBrawl
 
         void Update()
         {
+            if (EstadoJugadorController.Instancia != null &&
+                !EstadoJugadorController.Instancia.PuedeMoverse()) return;
             if (muerto) return;
 
             float h = Input.GetAxisRaw("Horizontal");
@@ -112,6 +114,8 @@ namespace RealmBrawl
 
         void FixedUpdate()
         {
+            if (EstadoJugadorController.Instancia != null &&
+                !EstadoJugadorController.Instancia.PuedeMoverse()) return;
             if (muerto) return;
             if (direccionMovimiento.sqrMagnitude < 0.01f) return;
 

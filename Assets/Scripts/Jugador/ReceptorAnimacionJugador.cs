@@ -8,14 +8,14 @@ namespace RealmBrawl
     /// </summary>
     public class ReceptorAnimacionJugador : MonoBehaviour
     {
-        SistemaCombate combate;
+        CombateCaballero combate;
 
         void Awake()
         {
-            // El SistemaCombate está en el padre (Jugador)
-            combate = GetComponentInParent<SistemaCombate>();
+            // El CombateCaballero está en el padre (Jugador)
+            combate = GetComponentInParent<CombateCaballero>();
             if (combate == null)
-                Debug.LogWarning("ReceptorAnimacionJugador: No se encontró SistemaCombate en el padre.");
+                Debug.LogWarning("ReceptorAnimacionJugador: No se encontró CombateCaballero en el padre.");
         }
 
         // Llamado por Animation Event en las animaciones de ataque normal

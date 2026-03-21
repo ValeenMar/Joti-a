@@ -210,7 +210,8 @@ public class SetupCompleto : EditorWindow
         jugador.AddComponent<MovimientoJugador>();
         jugador.AddComponent<VidaJugador>();
         jugador.AddComponent<Estamina>();
-        var combate = jugador.AddComponent<SistemaCombate>();
+        var combate = jugador.AddComponent<CombateCaballero>();
+        jugador.AddComponent<DodgeRoll>();
         jugador.AddComponent<Inventario>();
 
         // Asignar punto hitbox al sistema de combate
@@ -250,8 +251,11 @@ public class SetupCompleto : EditorWindow
         // Parametros
         controller.AddParameter("Velocidad", AnimatorControllerParameterType.Float);
         controller.AddParameter("Sprint", AnimatorControllerParameterType.Bool);
-        controller.AddParameter("AtaqueNormal", AnimatorControllerParameterType.Trigger);
-        controller.AddParameter("AtaqueFuerte", AnimatorControllerParameterType.Trigger);
+        controller.AddParameter("AtaqueTrigger0", AnimatorControllerParameterType.Trigger);
+        controller.AddParameter("AtaqueTrigger1", AnimatorControllerParameterType.Trigger);
+        controller.AddParameter("AtaqueTrigger2", AnimatorControllerParameterType.Trigger);
+        controller.AddParameter("AtaqueFuerteTrigger", AnimatorControllerParameterType.Trigger);
+        controller.AddParameter("RollTrigger", AnimatorControllerParameterType.Trigger);
         controller.AddParameter("RecibirDanio", AnimatorControllerParameterType.Trigger);
         controller.AddParameter("Morir", AnimatorControllerParameterType.Trigger);
 
@@ -264,10 +268,13 @@ public class SetupCompleto : EditorWindow
         var idleState = rootSM.AddState("Idle", new Vector3(0, 0, 0));
         var walkState = rootSM.AddState("Walk", new Vector3(250, -50, 0));
         var runState = rootSM.AddState("Run", new Vector3(250, 50, 0));
-        var atk1State = rootSM.AddState("AtaqueNormal", new Vector3(500, -50, 0));
-        var atk2State = rootSM.AddState("AtaqueFuerte", new Vector3(500, 50, 0));
-        var hitState = rootSM.AddState("RecibirDanio", new Vector3(500, 150, 0));
-        var deathState = rootSM.AddState("Morir", new Vector3(250, 250, 0));
+        var combo0State = rootSM.AddState("Combo0", new Vector3(500, -150, 0));
+        var combo1State = rootSM.AddState("Combo1", new Vector3(500, -50, 0));
+        var combo2State = rootSM.AddState("Combo2", new Vector3(500, 50, 0));
+        var fuertState = rootSM.AddState("AtaqueFuerte", new Vector3(500, 150, 0));
+        var rollState = rootSM.AddState("Roll", new Vector3(500, 250, 0));
+        var hitState = rootSM.AddState("RecibirDanio", new Vector3(500, 350, 0));
+        var deathState = rootSM.AddState("Morir", new Vector3(250, 450, 0));
 
         rootSM.defaultState = idleState;
 
@@ -275,8 +282,21 @@ public class SetupCompleto : EditorWindow
         if (clips.ContainsKey("idle")) idleState.motion = clips["idle"];
         if (clips.ContainsKey("walk")) walkState.motion = clips["walk"];
         if (clips.ContainsKey("run")) runState.motion = clips["run"];
-        if (clips.ContainsKey("slash")) atk1State.motion = clips["slash"];
-        if (clips.ContainsKey("attack")) atk2State.motion = clips["attack"];
+        // Combo0: primer clip de attack o slash
+        if (clips.ContainsKey("attack")) combo0State.motion = clips["attack"];
+        else if (clips.ContainsKey("slash")) combo0State.motion = clips["slash"];
+        // Combo1: attack(2) o slash(2)
+        if (clips.ContainsKey("attack(2)")) combo1State.motion = clips["attack(2)"];
+        else if (clips.ContainsKey("slash(2)")) combo1State.motion = clips["slash(2)"];
+        // Combo2: attack(3) o slash(3)
+        if (clips.ContainsKey("attack(3)")) combo2State.motion = clips["attack(3)"];
+        else if (clips.ContainsKey("slash(3)")) combo2State.motion = clips["slash(3)"];
+        // Fuerte: power up o attack(4)
+        if (clips.ContainsKey("power up")) fuertState.motion = clips["power up"];
+        else if (clips.ContainsKey("attack(4)")) fuertState.motion = clips["attack(4)"];
+        // Roll: roll si existe, sino jump
+        if (clips.ContainsKey("roll")) rollState.motion = clips["roll"];
+        else if (clips.ContainsKey("jump")) rollState.motion = clips["jump"];
         if (clips.ContainsKey("impact")) hitState.motion = clips["impact"];
         if (clips.ContainsKey("death")) deathState.motion = clips["death"];
 
@@ -308,27 +328,57 @@ public class SetupCompleto : EditorWindow
         runToIdle.hasExitTime = false;
         runToIdle.duration = 0.15f;
 
-        // AnyState -> Ataques (triggers)
-        var anyToAtk1 = rootSM.AddAnyStateTransition(atk1State);
-        anyToAtk1.AddCondition(AnimatorConditionMode.If, 0, "AtaqueNormal");
-        anyToAtk1.hasExitTime = false;
-        anyToAtk1.duration = 0.1f;
+        // AnyState -> Ataques combo y especiales (triggers)
+        var anyToCombo0 = rootSM.AddAnyStateTransition(combo0State);
+        anyToCombo0.AddCondition(AnimatorConditionMode.If, 0, "AtaqueTrigger0");
+        anyToCombo0.hasExitTime = false;
+        anyToCombo0.duration = 0.1f;
 
-        var anyToAtk2 = rootSM.AddAnyStateTransition(atk2State);
-        anyToAtk2.AddCondition(AnimatorConditionMode.If, 0, "AtaqueFuerte");
-        anyToAtk2.hasExitTime = false;
-        anyToAtk2.duration = 0.1f;
+        var anyToCombo1 = rootSM.AddAnyStateTransition(combo1State);
+        anyToCombo1.AddCondition(AnimatorConditionMode.If, 0, "AtaqueTrigger1");
+        anyToCombo1.hasExitTime = false;
+        anyToCombo1.duration = 0.1f;
+
+        var anyToCombo2 = rootSM.AddAnyStateTransition(combo2State);
+        anyToCombo2.AddCondition(AnimatorConditionMode.If, 0, "AtaqueTrigger2");
+        anyToCombo2.hasExitTime = false;
+        anyToCombo2.duration = 0.1f;
+
+        var anyToFuert = rootSM.AddAnyStateTransition(fuertState);
+        anyToFuert.AddCondition(AnimatorConditionMode.If, 0, "AtaqueFuerteTrigger");
+        anyToFuert.hasExitTime = false;
+        anyToFuert.duration = 0.1f;
+
+        var anyToRoll = rootSM.AddAnyStateTransition(rollState);
+        anyToRoll.AddCondition(AnimatorConditionMode.If, 0, "RollTrigger");
+        anyToRoll.hasExitTime = false;
+        anyToRoll.duration = 0.1f;
 
         // Ataques -> Idle (por exit time)
-        var atk1ToIdle = atk1State.AddTransition(idleState);
-        atk1ToIdle.hasExitTime = true;
-        atk1ToIdle.exitTime = 0.85f;
-        atk1ToIdle.duration = 0.15f;
+        var combo0ToIdle = combo0State.AddTransition(idleState);
+        combo0ToIdle.hasExitTime = true;
+        combo0ToIdle.exitTime = 0.85f;
+        combo0ToIdle.duration = 0.15f;
 
-        var atk2ToIdle = atk2State.AddTransition(idleState);
-        atk2ToIdle.hasExitTime = true;
-        atk2ToIdle.exitTime = 0.85f;
-        atk2ToIdle.duration = 0.15f;
+        var combo1ToIdle = combo1State.AddTransition(idleState);
+        combo1ToIdle.hasExitTime = true;
+        combo1ToIdle.exitTime = 0.85f;
+        combo1ToIdle.duration = 0.15f;
+
+        var combo2ToIdle = combo2State.AddTransition(idleState);
+        combo2ToIdle.hasExitTime = true;
+        combo2ToIdle.exitTime = 0.85f;
+        combo2ToIdle.duration = 0.15f;
+
+        var fuertToIdle = fuertState.AddTransition(idleState);
+        fuertToIdle.hasExitTime = true;
+        fuertToIdle.exitTime = 0.85f;
+        fuertToIdle.duration = 0.15f;
+
+        var rollToIdle = rollState.AddTransition(idleState);
+        rollToIdle.hasExitTime = true;
+        rollToIdle.exitTime = 0.85f;
+        rollToIdle.duration = 0.15f;
 
         // AnyState -> Danio
         var anyToHit = rootSM.AddAnyStateTransition(hitState);
@@ -575,6 +625,7 @@ public class SetupCompleto : EditorWindow
         var oleadas = gmObj.AddComponent<SistemaOleadas>();
         gmObj.AddComponent<SistemaXP>();
         gmObj.AddComponent<SistemaRachas>();
+        gmObj.AddComponent<EstadoJugadorController>();
 
         // Configurar oleadas con prefab y spawn points
         var so = new SerializedObject(oleadas);
