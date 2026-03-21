@@ -246,7 +246,10 @@ public class SetupCompleto : EditorWindow
 
         // Siempre regenerar para garantizar que los parametros esten actualizados
         if (File.Exists(controllerPath))
+        {
             AssetDatabase.DeleteAsset(controllerPath);
+            AssetDatabase.Refresh(); // limpiar cache antes de crear el nuevo
+        }
 
         var controller = AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
 
