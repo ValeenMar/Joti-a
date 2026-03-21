@@ -26,7 +26,9 @@ namespace RealmBrawl
 
         [Header("Colision")]
         [SerializeField] float radioColision = 0.3f;
-        [SerializeField] LayerMask mascaraColision = ~0;
+        // ~0 = todo. Excluimos la capa 0 (Default donde está el jugador)
+        // para que la cámara no colisione con el propio personaje.
+        [SerializeField] LayerMask mascaraColision = ~(1 << 0);
 
         float rotacionX;
         float rotacionY = 15f;

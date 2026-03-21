@@ -51,6 +51,11 @@ namespace RealmBrawl
             rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
 
             animator = GetComponentInChildren<Animator>();
+            // ROOT MOTION OFF: las animaciones del Paladin tienen root motion
+            // que mueve el personaje por su cuenta. El script maneja el movimiento.
+            if (animator != null)
+                animator.applyRootMotion = false;
+
             estamina = GetComponent<Estamina>();
         }
 
