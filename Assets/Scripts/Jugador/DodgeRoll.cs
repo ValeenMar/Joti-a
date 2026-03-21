@@ -44,7 +44,7 @@ namespace RealmBrawl
         void Update()
         {
             if (enCooldown) return;
-            if (!EstadoJugadorController.Instancia.PuedeDodge()) return;
+            if (EstadoJugadorController.Instancia == null || !EstadoJugadorController.Instancia.PuedeDodge()) return;
 
             foreach (var tecla in teclasDireccion)
             {
