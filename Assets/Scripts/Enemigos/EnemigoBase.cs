@@ -14,7 +14,7 @@ namespace RealmBrawl
         [SerializeField] float velocidadMovimiento = 3.5f;
 
         [Header("Deteccion")]
-        [SerializeField] float rangoDeteccion = 12f;
+        [SerializeField] float rangoDeteccion = 8f;
         [SerializeField] float rangoAtaque = 2.5f;
         [SerializeField] float anguloVision = 120f;
 
@@ -32,6 +32,12 @@ namespace RealmBrawl
         EstadoEnemigo estado = EstadoEnemigo.Patrullar;
         float timerAtaque;
         bool muertoProcessado;
+
+        // Delay de activacion al spawnear
+        float tiempoHastaActivar = 1.5f;
+
+        // Movimiento directo (fallback cuando no hay NavMesh)
+        bool usarMovimientoDirecto = false;
 
         // Patrulla
         Vector3 puntoPatrullaA;
@@ -66,6 +72,13 @@ namespace RealmBrawl
         {
             agente.speed = velocidadMovimiento;
 
+            // Validar que el agente este en el NavMesh
+            if (!agente.isOnNavMesh)
+            {
+                Debug.LogWarning($"Enemigo {gameObject.name} no está en el NavMesh - usando movimiento directo");
+                usarMovimientoDirecto = true;
+            }
+
             // Buscar jugador
             var jugadorObj = GameObject.FindGameObjectWithTag("Player");
             if (jugadorObj != null) jugador = jugadorObj.transform;
@@ -87,6 +100,13 @@ namespace RealmBrawl
         void Update()
         {
             if (estado == EstadoEnemigo.Muerto) return;
+
+            // Delay de activacion post-spawn: no hacer nada hasta que expire
+            if (tiempoHastaActivar > 0f)
+            {
+                tiempoHastaActivar -= Time.deltaTime;
+                return;
+            }
 
             timerAtaque -= Time.deltaTime;
 
@@ -117,6 +137,7 @@ namespace RealmBrawl
 
         void ActualizarPatrulla()
         {
+            if (usarMovimientoDirecto) return; // sin NavMesh, no patrullamos
             if (!agente.isOnNavMesh) return;
 
             if (timerEspera > 0f)
@@ -137,7 +158,7 @@ namespace RealmBrawl
 
         void ActualizarPersecucion()
         {
-            if (jugador == null || !agente.isOnNavMesh) return;
+            if (jugador == null) return;
 
             float dist = Vector3.Distance(transform.position, jugador.position);
 
@@ -153,7 +174,16 @@ namespace RealmBrawl
                 return;
             }
 
-            agente.SetDestination(jugador.position);
+            if (usarMovimientoDirecto)
+            {
+                Vector3 dir = (jugador.position - transform.position).normalized;
+                transform.position += dir * velocidadMovimiento * 0.5f * Time.deltaTime;
+                transform.LookAt(jugador);
+            }
+            else if (agente.isOnNavMesh)
+            {
+                agente.SetDestination(jugador.position);
+            }
         }
 
         void ActualizarAtaque()
@@ -175,7 +205,7 @@ namespace RealmBrawl
             }
 
             // Parar al atacar
-            if (agente.isOnNavMesh)
+            if (!usarMovimientoDirecto && agente.isOnNavMesh)
                 agente.SetDestination(transform.position);
 
             if (timerAtaque <= 0f)
@@ -226,7 +256,7 @@ namespace RealmBrawl
         void CambiarEstado(EstadoEnemigo nuevoEstado)
         {
             estado = nuevoEstado;
-            if (nuevoEstado == EstadoEnemigo.Perseguir && agente.isOnNavMesh)
+            if (nuevoEstado == EstadoEnemigo.Perseguir && !usarMovimientoDirecto && agente.isOnNavMesh)
                 agente.isStopped = false;
         }
 
@@ -263,11 +293,15 @@ namespace RealmBrawl
 
             estado = EstadoEnemigo.Muerto;
 
+            // Detener y desactivar NavMeshAgent
             if (agente.isOnNavMesh)
-            {
                 agente.isStopped = true;
-                agente.enabled = false;
-            }
+            agente.enabled = false;
+
+            // Desactivar Rigidbody si existe para evitar que flote
+            var rb = GetComponent<Rigidbody>();
+            if (rb != null)
+                rb.isKinematic = true;
 
             if (animator != null)
                 animator.SetTrigger(hashMorir);

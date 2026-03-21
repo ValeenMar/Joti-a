@@ -24,6 +24,11 @@ public class SetupCompleto : EditorWindow
             "Continuar?", "SI, DALE!", "Cancelar"))
             return;
 
+        // Paso 0: Asegurar que existan los tags necesarios
+        CrearTagSiNoExiste("Ground");
+        CrearTagSiNoExiste("Jugador");
+        CrearTagSiNoExiste("Enemigo");
+
         // Paso 1: Limpiar objetos viejos
         EditorUtility.DisplayProgressBar("Setup", "Limpiando escena...", 0.05f);
         LimpiarEscena();
@@ -31,6 +36,10 @@ public class SetupCompleto : EditorWindow
         // Paso 2: Luz
         EditorUtility.DisplayProgressBar("Setup", "Configurando iluminacion...", 0.1f);
         ConfigurarLuz();
+
+        // Paso 2.5: Arreglar materiales de arboles (shader correcto)
+        EditorUtility.DisplayProgressBar("Setup", "Arreglando materiales de vegetacion...", 0.15f);
+        ArreglarMaterialesVegetacion();
 
         // Paso 3: Arena
         EditorUtility.DisplayProgressBar("Setup", "Generando arena...", 0.2f);
@@ -126,7 +135,7 @@ public class SetupCompleto : EditorWindow
         var rocas = BuscarPrefabs("Lowpoly_Environments", "Rock");
         var arbustos = BuscarPrefabs("Lowpoly_Environments", "Shrub");
 
-        Material matSuelo = BuscarMaterial("Grass");
+        Material matSuelo = BuscarMaterialSuelo();
         gen.AsignarRecursos(matSuelo, arboles, rocas, arbustos);
         gen.Generar();
 
@@ -175,6 +184,10 @@ public class SetupCompleto : EditorWindow
                 var controller = CrearAnimatorJugador();
                 if (controller != null)
                     animator.runtimeAnimatorController = controller;
+
+                // Receptor de Animation Events (OnImpactoNormal / OnImpactoFuerte)
+                // Debe estar en el mismo GameObject que el Animator
+                modelo.AddComponent<ReceptorAnimacionJugador>();
             }
         }
         else
@@ -464,8 +477,9 @@ public class SetupCompleto : EditorWindow
         // Componentes
         var agent = enemigo.AddComponent<NavMeshAgent>();
         agent.speed = 3.5f;
+        agent.acceleration = 8f;
         agent.angularSpeed = 120f;
-        agent.stoppingDistance = 1.5f;
+        agent.stoppingDistance = 1.8f;
         agent.radius = 0.4f;
         agent.height = 1.8f;
 
@@ -597,23 +611,29 @@ public class SetupCompleto : EditorWindow
 
     static void BakeNavMesh()
     {
-        // Agregar NavMeshSurface si existe como componente (requiere package)
-        // Fallback: usar el bake legacy
-        var suelo = GameObject.FindGameObjectWithTag("Ground");
-        if (suelo != null)
+        try
         {
-            // Asegurar que tiene MeshCollider o BoxCollider
-            if (suelo.GetComponent<Collider>() == null)
-                suelo.AddComponent<MeshCollider>();
+            // Buscar suelo por nombre como fallback si el tag falla
+            GameObject suelo = null;
+            try { suelo = GameObject.FindGameObjectWithTag("Ground"); } catch { }
 
-            // Marcar como static para NavMesh
-            GameObjectUtility.SetStaticEditorFlags(suelo,
-                StaticEditorFlags.NavigationStatic);
+            if (suelo == null)
+                suelo = GameObject.Find("Suelo");
+
+            if (suelo != null)
+            {
+                if (suelo.GetComponent<Collider>() == null)
+                    suelo.AddComponent<MeshCollider>();
+                suelo.isStatic = true;
+            }
+
+            UnityEditor.AI.NavMeshBuilder.BuildNavMesh();
+            Debug.Log("NavMesh baked!");
         }
-
-        // Intentar bake via API de Unity
-        UnityEditor.AI.NavMeshBuilder.BuildNavMesh();
-        Debug.Log("NavMesh baked!");
+        catch (System.Exception e)
+        {
+            Debug.LogWarning("NavMesh bake fallo (no es critico): " + e.Message);
+        }
     }
 
     static void CrearItemPocion(GameObject jugador)
@@ -654,6 +674,84 @@ public class SetupCompleto : EditorWindow
 
     // --- Utilidades ---
 
+    static void ArreglarMaterialesVegetacion()
+    {
+        // Buscar el shader correcto de Polytope para hojas
+        var shaderFoliage = Shader.Find("PT_Vegetation_Foliage_Shader");
+        if (shaderFoliage == null)
+        {
+            // Buscar por archivo
+            string[] shaderGuids = AssetDatabase.FindAssets("PT_Vegetation_Foliage_Shader t:Shader");
+            if (shaderGuids.Length > 0)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(shaderGuids[0]);
+                var shaderAsset = AssetDatabase.LoadAssetAtPath<Shader>(path);
+                if (shaderAsset != null) shaderFoliage = shaderAsset;
+            }
+        }
+
+        if (shaderFoliage == null)
+        {
+            Debug.LogWarning("No se encontro PT_Vegetation_Foliage_Shader - los arboles pueden verse oscuros");
+            return;
+        }
+
+        // Materiales de hojas que deben usar el shader de foliage
+        string[] nombresHojas = {
+            "PT_Pine_Tree_Leaves_Mat",
+            "PT_Generic_Leaf_mat",
+            "PT_Generic_Tree_Leaves_mat",
+            "PT_Fruit_Tree_Foliage_Mat"
+        };
+
+        foreach (string nombre in nombresHojas)
+        {
+            string[] guids = AssetDatabase.FindAssets(nombre + " t:Material",
+                new[] { "Assets/Polytope Studio" });
+
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+                if (mat != null && mat.shader != shaderFoliage)
+                {
+                    mat.shader = shaderFoliage;
+                    EditorUtility.SetDirty(mat);
+                    Debug.Log($"Material '{mat.name}' arreglado -> shader Foliage (double-sided)");
+                }
+            }
+        }
+
+        AssetDatabase.SaveAssets();
+    }
+
+    [MenuItem("Realm Brawl/Configurar/Arreglar Materiales Arboles")]
+    static void ArreglarMaterialesMenu()
+    {
+        ArreglarMaterialesVegetacion();
+        Debug.Log("Materiales de vegetacion arreglados!");
+    }
+
+    static void CrearTagSiNoExiste(string tag)
+    {
+        var tagManager = new SerializedObject(
+            AssetDatabase.LoadMainAssetAtPath("ProjectSettings/TagManager.asset"));
+        var tagsProp = tagManager.FindProperty("tags");
+
+        // Verificar si ya existe
+        for (int i = 0; i < tagsProp.arraySize; i++)
+        {
+            if (tagsProp.GetArrayElementAtIndex(i).stringValue == tag)
+                return; // Ya existe
+        }
+
+        // Agregar tag nuevo
+        tagsProp.InsertArrayElementAtIndex(tagsProp.arraySize);
+        tagsProp.GetArrayElementAtIndex(tagsProp.arraySize - 1).stringValue = tag;
+        tagManager.ApplyModifiedProperties();
+        Debug.Log($"Tag '{tag}' creado exitosamente");
+    }
+
     static GameObject[] BuscarPrefabs(string carpeta, string filtro)
     {
         var resultado = new List<GameObject>();
@@ -674,6 +772,33 @@ public class SetupCompleto : EditorWindow
         }
 
         return resultado.ToArray();
+    }
+
+    static Material BuscarMaterialSuelo()
+    {
+        // Buscar materiales con nombres de piedra/tierra en la carpeta de Polytope
+        string[] filtrosPiedra = { "Stone", "Rock", "Ground", "Dirt", "Cobble", "Gray" };
+        foreach (string filtro in filtrosPiedra)
+        {
+            string[] guids = AssetDatabase.FindAssets(filtro + " t:Material",
+                new[] { "Assets/Polytope Studio" });
+            if (guids.Length > 0)
+            {
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(AssetDatabase.GUIDToAssetPath(guids[0]));
+                if (mat != null)
+                {
+                    Debug.Log($"Material de suelo encontrado: {mat.name}");
+                    return mat;
+                }
+            }
+        }
+
+        // Fallback: crear material gris oscuro estilo piedra
+        var matPiedra = new Material(Shader.Find("Standard"));
+        matPiedra.color = new Color(0.45f, 0.42f, 0.40f);
+        matPiedra.name = "ArenaStone";
+        Debug.LogWarning("No se encontro material de piedra en Polytope Studio - usando ArenaStone gris generado");
+        return matPiedra;
     }
 
     static Material BuscarMaterial(string filtro)

@@ -87,6 +87,10 @@ namespace RealmBrawl
 
                     pos += new Vector3(Random.Range(-2f, 2f), 0, Random.Range(-2f, 2f));
 
+                    // No colocar decoraciones en el centro de la arena (radio 20) para dar espacio de combate
+                    if (new Vector2(pos.x, pos.z).magnitude < 20f)
+                        continue;
+
                     // Alternar entre arboles, rocas y arbustos
                     GameObject prefab = null;
                     float r = Random.value;

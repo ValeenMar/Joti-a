@@ -27,6 +27,7 @@ namespace RealmBrawl
         float timerCooldown;
         int nivelActual = 1;
         bool atacando;
+        bool ataqueEsFuerte;
 
         static readonly int hashAtaqueNormal = Animator.StringToHash("AtaqueNormal");
         static readonly int hashAtaqueFuerte = Animator.StringToHash("AtaqueFuerte");
@@ -86,13 +87,20 @@ namespace RealmBrawl
                 if (animator != null) animator.SetTrigger(hashAtaqueNormal);
             }
 
+            // Guardar el tipo de ataque; el daño se aplica cuando llega el Animation Event
+            ataqueEsFuerte = fuerte;
             atacando = true;
-            float danio = fuerte ? DanioActual * multiplicadorFuerte : DanioActual;
-
-            // Buscar enemigos en rango
-            AplicarDanioEnArea(danio, fuerte);
 
             StartCoroutine(FinAtaque(fuerte ? 0.6f : 0.35f));
+        }
+
+        /// <summary>
+        /// Llamado por ReceptorAnimacionJugador cuando el Animation Event de impacto se dispara.
+        /// </summary>
+        public void EjecutarImpacto(bool esFuerte)
+        {
+            float danio = ataqueEsFuerte ? DanioActual * multiplicadorFuerte : DanioActual;
+            AplicarDanioEnArea(danio, ataqueEsFuerte);
         }
 
         IEnumerator FinAtaque(float duracion)

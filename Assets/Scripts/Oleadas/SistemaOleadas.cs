@@ -22,7 +22,6 @@ namespace RealmBrawl
 
         int oleadaActual;
         int enemigosVivos;
-        bool oleadaEnCurso;
         List<EnemigoBase> enemigosActivos = new List<EnemigoBase>();
 
         public int OleadaActual => oleadaActual;
@@ -64,14 +63,14 @@ namespace RealmBrawl
                 else
                     cantidadEnemigos = enemigosBaseOleada + (oleadaActual - 1) * incrementoPorOleada;
 
-                oleadaEnCurso = true;
+
                 yield return StartCoroutine(SpawnearOleada(cantidadEnemigos, esBoss, esEspecial));
 
                 // Esperar a que mueran todos
                 while (enemigosVivos > 0)
                     yield return null;
 
-                oleadaEnCurso = false;
+
                 Eventos.AlCompletarOleada?.Invoke();
             }
         }
@@ -96,7 +95,7 @@ namespace RealmBrawl
                     else if (esEspecial)
                     {
                         // Oleada especial: muchos enemigos debiles y rapidos
-                        enemigoBase.ConfigurarStats(25f, 5f, 5f, 10f);
+                        enemigoBase.ConfigurarStats(25f, 5f, 4f, 10f);
                         enemigo.name = $"EnemigoRapido_{i}";
                         enemigo.transform.localScale = Vector3.one * 0.7f;
                     }
