@@ -218,11 +218,18 @@ namespace RealmBrawl
         void EjecutarAtaque()
         {
             if (animator != null) animator.SetTrigger(hashAtacar);
+            // El daño se aplica con delay para coincidir con la animacion
+            StartCoroutine(AplicarDanioConDelay(0.5f));
+        }
 
-            // Aplicar danio al jugador si esta en rango
-            if (jugador == null) return;
+        IEnumerator AplicarDanioConDelay(float delay)
+        {
+            yield return new WaitForSeconds(delay);
+
+            if (!EstaVivo || jugador == null) yield break;
+
             float dist = Vector3.Distance(transform.position, jugador.position);
-            if (dist > rangoAtaque * 1.2f) return;
+            if (dist > rangoAtaque * 1.2f) yield break;
 
             var vidaJugador = jugador.GetComponent<VidaJugador>();
             if (vidaJugador != null && vidaJugador.EstaVivo)

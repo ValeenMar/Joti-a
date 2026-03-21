@@ -334,30 +334,36 @@ public class SetupCompleto : EditorWindow
         runToIdle.duration = 0.15f;
 
         // AnyState -> Ataques combo y especiales (triggers)
+        // canTransitionToSelf=false evita que el mismo estado se interrumpa a si mismo
         var anyToCombo0 = rootSM.AddAnyStateTransition(combo0State);
         anyToCombo0.AddCondition(AnimatorConditionMode.If, 0, "AtaqueTrigger0");
         anyToCombo0.hasExitTime = false;
-        anyToCombo0.duration = 0.1f;
+        anyToCombo0.duration = 0.05f;
+        anyToCombo0.canTransitionToSelf = false;
 
         var anyToCombo1 = rootSM.AddAnyStateTransition(combo1State);
         anyToCombo1.AddCondition(AnimatorConditionMode.If, 0, "AtaqueTrigger1");
         anyToCombo1.hasExitTime = false;
-        anyToCombo1.duration = 0.1f;
+        anyToCombo1.duration = 0.05f;
+        anyToCombo1.canTransitionToSelf = false;
 
         var anyToCombo2 = rootSM.AddAnyStateTransition(combo2State);
         anyToCombo2.AddCondition(AnimatorConditionMode.If, 0, "AtaqueTrigger2");
         anyToCombo2.hasExitTime = false;
-        anyToCombo2.duration = 0.1f;
+        anyToCombo2.duration = 0.05f;
+        anyToCombo2.canTransitionToSelf = false;
 
         var anyToFuert = rootSM.AddAnyStateTransition(fuertState);
         anyToFuert.AddCondition(AnimatorConditionMode.If, 0, "AtaqueFuerteTrigger");
         anyToFuert.hasExitTime = false;
-        anyToFuert.duration = 0.1f;
+        anyToFuert.duration = 0.05f;
+        anyToFuert.canTransitionToSelf = false;
 
         var anyToRoll = rootSM.AddAnyStateTransition(rollState);
         anyToRoll.AddCondition(AnimatorConditionMode.If, 0, "RollTrigger");
         anyToRoll.hasExitTime = false;
-        anyToRoll.duration = 0.1f;
+        anyToRoll.duration = 0.05f;
+        anyToRoll.canTransitionToSelf = false;
 
         // Ataques -> Idle (por exit time)
         var combo0ToIdle = combo0State.AddTransition(idleState);
