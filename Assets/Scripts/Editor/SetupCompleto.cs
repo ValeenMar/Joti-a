@@ -3,6 +3,8 @@ using UnityEngine;
 using UnityEditor;
 using UnityEngine.AI;
 using UnityEditor.Animations;
+using UnityEditor.SceneManagement;
+using UnityEngine.SceneManagement;
 using System.Collections.Generic;
 using System.IO;
 using RealmBrawl;
@@ -242,9 +244,9 @@ public class SetupCompleto : EditorWindow
 
         string controllerPath = dir + "/JugadorAnimator.controller";
 
-        // Si ya existe, usar ese
-        var existing = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
-        if (existing != null) return existing;
+        // Siempre regenerar para garantizar que los parametros esten actualizados
+        if (File.Exists(controllerPath))
+            AssetDatabase.DeleteAsset(controllerPath);
 
         var controller = AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
 
@@ -664,12 +666,10 @@ public class SetupCompleto : EditorWindow
     {
         try
         {
-            // Buscar suelo por nombre como fallback si el tag falla
+            // Buscar suelo por tag o nombre
             GameObject suelo = null;
             try { suelo = GameObject.FindGameObjectWithTag("Ground"); } catch { }
-
-            if (suelo == null)
-                suelo = GameObject.Find("Suelo");
+            if (suelo == null) suelo = GameObject.Find("Suelo");
 
             if (suelo != null)
             {
@@ -678,8 +678,26 @@ public class SetupCompleto : EditorWindow
                 suelo.isStatic = true;
             }
 
+            // CRITICO: guardar la escena antes de bakear.
+            // Unity necesita un archivo .unity en disco para persistir el NavMesh.
+            var escena = SceneManager.GetActiveScene();
+            string rutaEscena = escena.path;
+            if (string.IsNullOrEmpty(rutaEscena))
+            {
+                // Escena sin guardar (Untitled) → guardar como ArenaGame
+                rutaEscena = "Assets/Scenes/ArenaGame.unity";
+                if (!Directory.Exists("Assets/Scenes"))
+                    Directory.CreateDirectory("Assets/Scenes");
+                EditorSceneManager.SaveScene(escena, rutaEscena);
+                Debug.Log("Escena guardada como: " + rutaEscena);
+            }
+            else
+            {
+                EditorSceneManager.SaveScene(escena);
+            }
+
             UnityEditor.AI.NavMeshBuilder.BuildNavMesh();
-            Debug.Log("NavMesh baked!");
+            Debug.Log("NavMesh baked OK!");
         }
         catch (System.Exception e)
         {
