@@ -80,5 +80,29 @@ namespace RealmBrawl
             timerInvulnerable = 0f;
             Eventos.AlCambiarVidaJugador?.Invoke(vidaActual, vidaMaxima);
         }
+
+        /// <summary>
+        /// Aplica iframes al jugador. Si ya hay iframes activos, toma el mayor de los dos.
+        /// Llamado automáticamente al iniciar un dodge roll.
+        /// </summary>
+        public void AplicarInvulnerabilidad(float duracion)
+        {
+            timerInvulnerable = Mathf.Max(timerInvulnerable, duracion);
+        }
+
+        void OnEnable()
+        {
+            Eventos.AlIniciarRoll += OnRoll;
+        }
+
+        void OnDisable()
+        {
+            Eventos.AlIniciarRoll -= OnRoll;
+        }
+
+        void OnRoll()
+        {
+            AplicarInvulnerabilidad(0.35f);
+        }
     }
 }
