@@ -31,6 +31,12 @@ namespace RealmBrawl
         // XP
         public static Action<float, float, int> AlCambiarXP; // (actual, requerida, nivel)
 
+        // Combate GoW-style
+        public static Action<int> AlCambiarComboIndex;          // índice actual del combo (0,1,2)
+        public static Action AlIniciarRoll;                      // cuando empieza el dodge roll
+        public static Action AlTerminarRoll;                     // cuando termina el dodge roll
+        public static Action<EstadoJugador> AlCambiarEstadoJugador; // cambio de estado del jugador
+
         public static void LimpiarTodo()
         {
             AlAplicarDanio = null;
@@ -46,6 +52,10 @@ namespace RealmBrawl
             AlCambiarSlot = null;
             AlUsarItem = null;
             AlCambiarXP = null;
+            AlCambiarComboIndex = null;
+            AlIniciarRoll = null;
+            AlTerminarRoll = null;
+            AlCambiarEstadoJugador = null;
         }
     }
 }
