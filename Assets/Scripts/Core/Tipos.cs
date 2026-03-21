@@ -30,4 +30,13 @@ namespace RealmBrawl
         EsqueletoArquero,
         Boss
     }
+
+    public enum EstadoJugador
+    {
+        Normal,
+        Atacando,      // en animación de golpe, acepta buffer del próximo hit
+        GolpeFuerte,   // locked, no acepta input
+        Rodando,       // iframes activos, no acepta input
+        Muerto
+    }
 }
