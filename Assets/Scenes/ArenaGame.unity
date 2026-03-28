@@ -121,7 +121,7 @@ NavMeshSettings:
     preserveTilesOutsideBounds: 0
     debug:
       m_Flags: 0
-  m_NavMeshData: {fileID: 0}
+  m_NavMeshData: {fileID: 23800000, guid: 0f53c1449eeb2414b90dd3aa297bdaa8, type: 2}
 --- !u!1 &23240629
 GameObject:
   m_ObjectHideFlags: 0
@@ -10785,6 +10785,7 @@ GameObject:
   - component: {fileID: 1406169209}
   - component: {fileID: 1406169208}
   - component: {fileID: 1406169207}
+  - component: {fileID: 1406169215}
   m_Layer: 0
   m_Name: Jugador
   m_TagString: Player
@@ -10961,6 +10962,20 @@ Rigidbody:
   m_Interpolate: 1
   m_Constraints: 112
   m_CollisionDetection: 1
+--- !u!114 &1406169215
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1406169205}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 41271eaec561bbe4098e4ee7e03b7321, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  pocion: {fileID: 11400000, guid: 1c999322d01859840b9e2ac345a8f96b, type: 2}
+  cantidadPociones: 3
 --- !u!1 &1426505646
 GameObject:
   m_ObjectHideFlags: 0
